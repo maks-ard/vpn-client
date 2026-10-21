@@ -35,8 +35,10 @@ jobs:
         env:
           VPNCLIENT_SINGBOX: ${{ runner.temp }}/sing-box
       - name: build windows
-        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o dist/vpnclient.exe ./cmd/vpnclient
+        run: |
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${GITHUB_SHA::7}" -o dist/vpnclient.exe ./cmd/vpnclient
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o dist/vpnctl.exe ./cmd/vpnctl
       - uses: actions/upload-artifact@v4
         with:
           name: vpnclient-windows-amd64
-          path: dist/vpnclient.exe
+          path: dist/*.exe

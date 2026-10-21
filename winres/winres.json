@@ -1,4 +1,12 @@
 {
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": [
+        "../cmd/vpnclient/icons/app.png",
+        "../cmd/vpnclient/icons/app16.png"
+      ]
+    }
+  },
   "RT_MANIFEST": {
     "#1": {
       "0409": {
@@ -6,7 +14,7 @@
           "name": "vpnclient",
           "version": ""
         },
-        "description": "VPN-клиент с раздельной маршрутизацией",
+        "description": "vpn-client",
         "minimum-os": "win10",
         "execution-level": "administrator",
         "ui-access": false,
@@ -26,7 +34,7 @@
         },
         "info": {
           "0409": {
-            "FileDescription": "vpnclient — раздельная маршрутизация через sing-box",
+            "FileDescription": "vpn-client",
             "ProductName": "vpnclient",
             "OriginalFilename": "vpnclient.exe",
             "LegalCopyright": "maks-ard"

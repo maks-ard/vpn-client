@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vpn-client</title>
+<link rel="stylesheet" href="app.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="titlebar">
+    <div class="brand">
+      <svg class="brand-icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path class="brand-check" d="M9 12l2 2 4-4"/></svg>
+      vpn-client
+    </div>
+    <div class="titlebar-buttons">
+      <button class="tb-btn" id="btn-minimise" aria-label="Свернуть">
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6h8"/></svg>
+      </button>
+      <button class="tb-btn" id="btn-close" aria-label="Скрыть в трей">
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="page" id="page-main">
+    <section class="hero">
+      <div class="power-ring">
+        <button class="power" id="power" aria-label="Подключить">
+          <svg width="52" height="52" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+        </button>
+      </div>
+      <div class="status">
+        <div class="status-title" id="status-title">Отключено</div>
+        <div class="status-sub" id="status-sub">Нажмите, чтобы подключиться</div>
+      </div>
+      <div class="speed" id="speed" hidden>
+        <div class="pill">
+          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M6 14l6 6 6-6"/></svg>
+          <span id="down">0 Б/с</span>
+        </div>
+        <div class="pill">
+          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4M6 10l6-6 6 6"/></svg>
+          <span id="up">0 Б/с</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="notice" id="notice" hidden></div>
+
+    <section class="routes">
+      <div class="section-label">Маршруты</div>
+
+      <button class="card route" id="route-corp" data-goto="settings">
+        <div class="card-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 7h1M14 7h1M9 11h1M14 11h1M10 21v-4h4v4"/></svg>
+        </div>
+        <div class="card-text">
+          <div class="card-title">Корпоративная сеть</div>
+          <div class="card-sub" id="corp-sub">OpenVPN</div>
+        </div>
+        <div class="badge" id="corp-badge"><span class="dot"></span><span>выкл</span></div>
+      </button>
+
+      <button class="card route" id="route-proxy">
+        <div class="card-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>
+        </div>
+        <div class="card-text">
+          <div class="card-title">Зарубежные сайты</div>
+          <div class="card-sub" id="proxy-sub">VLESS</div>
+        </div>
+        <div class="badge" id="proxy-badge"><span class="dot"></span><span>выкл</span></div>
+      </button>
+
+      <div class="card route">
+        <div class="card-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </div>
+        <div class="card-text">
+          <div class="card-title">Остальное</div>
+          <div class="card-sub" id="direct-sub">Напрямую · российские сайты и LAN</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <main class="page" id="page-settings" hidden>
+    <h1 class="page-title">Настройки</h1>
+
+    <section class="group">
+      <div class="section-label">Зарубежные серверы · VLESS</div>
+      <div class="card stack">
+        <label class="field-label" for="link">Ссылка на подписку или vless://</label>
+        <div class="row">
+          <input class="input" id="link" type="text" spellcheck="false" autocomplete="off" placeholder="https://…">
+          <button class="btn" id="btn-paste">Вставить</button>
+        </div>
+        <div class="hint" id="link-info" hidden></div>
+      </div>
+    </section>
+
+    <section class="group">
+      <div class="section-label">Корпоративная сеть · OpenVPN</div>
+      <div class="card stack">
+        <div class="row file-row">
+          <div class="card-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7l-4-4z"/><path d="M14 3v4h4"/></svg>
+          </div>
+          <div class="card-text">
+            <div class="card-title" id="ovpn-name">Файл не выбран</div>
+            <div class="card-sub" id="ovpn-server">Загрузите .ovpn от администратора</div>
+          </div>
+          <button class="btn" id="btn-ovpn">Выбрать</button>
+        </div>
+        <div class="hint ok" id="ovpn-cert" hidden>
+          <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>
+          Вход по сертификату из файла, пароль не нужен
+        </div>
+        <div class="grid2" id="ovpn-auth" hidden>
+          <div class="stack-sm">
+            <label class="field-label" for="ovpn-user">Логин</label>
+            <input class="input" id="ovpn-user" type="text" autocomplete="off">
+          </div>
+          <div class="stack-sm">
+            <label class="field-label" for="ovpn-pass">Пароль</label>
+            <input class="input" id="ovpn-pass" type="password" autocomplete="off">
+          </div>
+        </div>
+        <div class="stack-sm" id="domains-block">
+          <div class="field-label">Домены через OpenVPN</div>
+          <div class="chips" id="chips">
+            <form class="chip-add" id="domain-form">
+              <label class="visually-hidden" for="domain-input">Новый домен</label>
+              <input class="chip-input" id="domain-input" type="text" placeholder="+ домен" spellcheck="false" autocomplete="off">
+            </form>
+          </div>
+          <div class="hint">Поддомены включаются автоматически. Подсети от сервера добавляются сами.</div>
+        </div>
+        <button class="link-btn" id="btn-ovpn-remove" hidden>Удалить файл</button>
+      </div>
+    </section>
+
+    <section class="group">
+      <div class="section-label">Маршрутизация</div>
+      <div class="card list">
+        <label class="list-row">
+          <div class="card-text">
+            <div class="row-title">Российские сайты напрямую</div>
+            <div class="card-sub">Иначе через VLESS идёт всё, кроме работы</div>
+          </div>
+          <input class="switch" type="checkbox" id="opt-russia">
+        </label>
+      </div>
+    </section>
+
+    <section class="group">
+      <div class="section-label">Приложение</div>
+      <div class="card list">
+        <label class="list-row">
+          <div class="row-title">Запускать вместе с Windows</div>
+          <input class="switch" type="checkbox" id="opt-autostart">
+        </label>
+        <label class="list-row">
+          <div class="row-title">Подключаться при запуске</div>
+          <input class="switch" type="checkbox" id="opt-connect">
+        </label>
+        <label class="list-row">
+          <div class="row-title">Закрытие окна сворачивает в трей</div>
+          <input class="switch" type="checkbox" id="opt-tray">
+        </label>
+      </div>
+      <div class="hint pad" id="version"></div>
+    </section>
+  </main>
+
+  <div class="error-toast" id="toast" role="alert" hidden></div>
+
+  <nav class="nav" aria-label="Разделы">
+    <button class="nav-btn active" data-page="main">
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/></svg>
+      Главная
+    </button>
+    <button class="nav-btn" data-page="settings">
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      Настройки
+    </button>
+  </nav>
+
+  <div class="sheet-backdrop" id="sheet" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div class="sheet-head">
+        <div class="sheet-title" id="sheet-title">Сервер</div>
+        <button class="btn" id="btn-ping">Проверить пинг</button>
+      </div>
+      <div class="sheet-list" id="server-list"></div>
+      <button class="btn wide" id="btn-sheet-close">Готово</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

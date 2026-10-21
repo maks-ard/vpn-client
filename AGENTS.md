@@ -23,8 +23,8 @@ GOOS=windows go build ./...          # проверка, что Windows-сбор
 go vet ./... && GOOS=windows go vet ./...
 gofmt -l .                           # должно быть пусто
 go test ./...                        # unit-тесты
-VPNCLIENT_SINGBOX=/path/to/sing-box go test ./internal/singbox/   # + проверка конфига настоящим sing-box
-go run ./cmd/vpnclient config -p internal/singbox/testdata/profile.yaml   # посмотреть итоговый конфиг
+VPNCLIENT_SINGBOX=/path/to/sing-box go test ./...   # + проверка конфига и полный цикл подключения с настоящим sing-box
+go run ./cmd/vpnctl config -p internal/singbox/testdata/profile.yaml   # посмотреть итоговый конфиг
 ```
 
 Собрать sing-box для `VPNCLIENT_SINGBOX` (версия и теги как в CI):
@@ -40,21 +40,40 @@ GOTOOLCHAIN=auto GOBIN=$PWD/.bin go install \
 ## Структура
 
 ```
-cmd/vpnclient/       CLI: run | check | config | version
-internal/profile/    профиль пользователя (YAML), значения по умолчанию, валидация
+cmd/vpnclient/       GUI-приложение (Wails v3, только windows): main.go, service.go
+  frontend/          HTML/CSS/JS без сборщика; Go вызывается через /wails/runtime.js
+  icons/             иконка приложения и 4 состояния иконки в трее (PNG)
+cmd/vpnctl/          консольная утилита разработчика: run | check | config | version
+internal/app/        логика приложения без GUI: настройки, Manager (подключение,
+                     статус через Clash API, журнал), автозапуск
+internal/profile/    профиль (YAML для vpnctl; GUI собирает его из настроек)
+internal/subscription/  подписки: загрузка, base64, subscription-userinfo, кэш
 internal/ovpn/       парсер .ovpn → ovpn.Config (без зависимостей от sing-box)
 internal/vless/      парсер ссылок vless://
-internal/singbox/    сборка JSON-конфига sing-box из profile + vless + ovpn
-internal/runner/     запуск и остановка sing-box; *_windows.go / *_other.go
-profiles/example.yaml  документированный пример профиля
-scripts/*.ps1        сборка под Windows и загрузка sing-box
-internal/singboxbin/  sing-box.exe, встроенный в релизную сборку (тег embed_singbox)
-winres/winres.json   манифест (requireAdministrator) и версия exe для go-winres
+internal/singbox/    сборка JSON-конфига sing-box
+internal/runner/     запуск/остановка sing-box, распаковка встроенного; *_windows.go / *_other.go
+internal/singboxbin/ sing-box.exe, встроенный в релизную сборку (тег embed_singbox)
+winres/winres.json   иконка, манифест (requireAdministrator) и версия exe для go-winres
+profiles/example.yaml  пример профиля для vpnctl
 .github/workflows/   ci.yml (каждый push и PR), release.yml (теги v*)
 ```
 
-Зависимости направлены строго вниз: `cmd` → `singbox` → `profile`/`ovpn`/`vless`;
-`runner` ни от чего внутреннего не зависит.
+Зависимости направлены строго вниз: `cmd` → `app` → `singbox` →
+`profile`/`subscription`/`ovpn`/`vless`; `runner` ни от чего внутреннего не зависит.
+Wails импортирует только `cmd/vpnclient`: `internal/app` тестируется без GUI.
+
+## GUI
+
+- Фронтенд — обычные HTML/CSS/JS в `cmd/vpnclient/frontend`, без npm и сборщика.
+  Методы Go вызываются как `Call.ByName("main.Service.<Метод>")`, состояние приходит
+  событием `state`. Новый метод — экспортируемый метод `Service` в `service.go`.
+- Дизайн согласован с владельцем (тёмная тема, окно 400×680, «Журнал» только в трее);
+  заметные изменения внешнего вида сначала согласуй.
+- Проверка вёрстки: открой `frontend/index.html` в Chromium (Playwright) с подменой
+  `/wails/runtime.js` на мок и сними скриншоты состояний.
+- Wails v3 пока в beta: версия зафиксирована в `go.mod`, обновляй осознанно.
+- `cmd/vpnclient` собирается только под windows (`//go:build windows`), под Linux
+  для него нужны GTK/WebKit — не добавляй их в CI.
 
 ## Правила для конфига sing-box
 
@@ -101,7 +120,7 @@ winres/winres.json   манифест (requireAdministrator) и версия exe
   `profile.yaml`, корпоративные адреса и подсети. Они перечислены в `.gitignore`.
   Перед коммитом проверяй `git status` и diff.
 - Конфиг передаётся в sing-box через stdin (`-c stdin`), чтобы секреты не
-  оставались на диске. `vpnclient config -o` пишет файл с правами `0600`.
+  оставались на диске. `vpnctl config -o` пишет файл с правами `0600`.
 - Не отключай `strict_route` в TUN: на Windows он защищает от DNS-утечек.
 
 ## Релизы

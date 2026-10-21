@@ -1,224 +1,106 @@
-// vpnclient поднимает TUN через sing-box и разводит трафик:
-// корпоративный — через OpenVPN, зарубежный — через VLESS, остальное напрямую.
+//go:build windows
+
+// vpnclient — VPN-клиент для Windows с окном и иконкой в трее: корпоративный
+// трафик идёт через OpenVPN, зарубежный через VLESS, остальное напрямую.
 package main
 
 import (
-	"context"
-	"errors"
-	"flag"
-	"fmt"
+	"embed"
+	"io/fs"
+	"log"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"runtime"
-	"syscall"
+	"slices"
 
-	"github.com/maks-ard/vpn-client/internal/runner"
-	"github.com/maks-ard/vpn-client/internal/singbox"
-	"github.com/maks-ard/vpn-client/internal/singboxbin"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
+
+	"github.com/maks-ard/vpn-client/internal/app"
 )
 
 var version = "dev"
 
-const usage = `vpnclient — раздельная маршрутизация через sing-box
+//go:embed all:frontend
+var frontend embed.FS
 
-Использование:
-  vpnclient run    [-p профиль]  подключиться (нужны права администратора), Ctrl+C — отключиться
-  vpnclient check  [-p профиль]  проверить профиль и сгенерированный конфиг
-  vpnclient config [-p профиль] [-o файл]  вывести конфиг sing-box
-  vpnclient version
+//go:embed icons
+var icons embed.FS
 
-По умолчанию профиль — profile.yaml рядом с vpnclient.exe.
-`
+func icon(name string) []byte {
+	data, err := icons.ReadFile("icons/" + name + ".png")
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
-	}
-	var err error
-	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
-	case "run":
-		err = cmdRun(args)
-	case "check":
-		err = cmdCheck(args)
-	case "config":
-		err = cmdConfig(args)
-	case "version", "-v", "--version":
-		fmt.Println("vpnclient", version)
-	case "help", "-h", "--help":
-		fmt.Print(usage)
-	default:
-		fmt.Fprintf(os.Stderr, "неизвестная команда %q\n\n%s", cmd, usage)
-		os.Exit(2)
-	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "ошибка:", err)
-		os.Exit(1)
-	}
-}
+	// --autostart передаёт задача планировщика: стартуем свёрнутыми в трей.
+	autostart := slices.Contains(os.Args[1:], "--autostart")
 
-type common struct {
-	profile string
-	exeDir  string
-}
-
-func parseFlags(name string, args []string, extra func(*flag.FlagSet)) (*common, error) {
-	exeDir := "."
-	if exe, err := os.Executable(); err == nil {
-		exeDir = filepath.Dir(exe)
-	}
-	c := &common{exeDir: exeDir}
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.StringVar(&c.profile, "p", filepath.Join(exeDir, "profile.yaml"), "путь к профилю")
-	if extra != nil {
-		extra(fs)
-	}
-	if err := fs.Parse(args); err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-
-// load читает профиль, собирает конфиг и печатает предупреждения.
-func (c *common) load() (*singbox.Input, []byte, error) {
-	dataDir, err := c.dataDir()
+	paths, err := app.DefaultPaths()
 	if err != nil {
-		return nil, nil, err
+		log.Fatal(err)
 	}
-	in, err := singbox.Load(context.Background(), c.profile, dataDir)
+	assets, err := fs.Sub(frontend, "frontend")
 	if err != nil {
-		return nil, nil, err
-	}
-	for _, w := range in.Warnings() {
-		fmt.Fprintln(os.Stderr, "предупреждение:", w)
-	}
-	cfg, err := singbox.Build(in)
-	if err != nil {
-		return nil, nil, err
-	}
-	return in, cfg, nil
-}
-
-// singBox возвращает путь к sing-box. Релизная сборка несёт его внутри себя
-// и распаковывает в data; release нужно вызвать после остановки sing-box.
-func (c *common) singBox(in *singbox.Input) (path string, release func(), err error) {
-	if p := in.Profile.SingBox.Path; p != "" {
-		return in.Profile.Resolve(p), func() {}, nil
-	}
-	if data := singboxbin.Data(); data != nil {
-		dir, err := c.dataDir()
-		if err != nil {
-			return "", nil, err
-		}
-		return runner.Install(dir, data)
-	}
-	name := "sing-box"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	return filepath.Join(c.exeDir, name), func() {}, nil
-}
-
-func (c *common) dataDir() (string, error) {
-	dir := filepath.Join(c.exeDir, "data")
-	return dir, os.MkdirAll(dir, 0o700)
-}
-
-// checkSingBox проверяет, что sing-box подходящей версии и собран с OpenVPN.
-func checkSingBox(exe string, in *singbox.Input) error {
-	v, err := runner.GetVersion(exe)
-	if err != nil {
-		return fmt.Errorf("sing-box не найден или не запускается (%w); скачайте его скриптом scripts/fetch-singbox.ps1", err)
-	}
-	if !v.AtLeast(1, 14) {
-		return fmt.Errorf("нужен sing-box %s или новее, найден %s", singbox.MinVersion, v)
-	}
-	if in.OpenVPN != nil && len(v.Tags) > 0 && !v.HasTag("with_openvpn") {
-		return errors.New("sing-box собран без поддержки OpenVPN (тег with_openvpn), возьмите официальную сборку")
-	}
-	return nil
-}
-
-func cmdRun(args []string) error {
-	c, err := parseFlags("run", args, nil)
-	if err != nil {
-		return err
-	}
-	in, cfg, err := c.load()
-	if err != nil {
-		return err
-	}
-	if !runner.IsElevated() {
-		return errors.New("для TUN нужны права администратора: запустите консоль от имени администратора")
-	}
-	exe, release, err := c.singBox(in)
-	if err != nil {
-		return err
-	}
-	defer release()
-	if err := checkSingBox(exe, in); err != nil {
-		return err
-	}
-	dataDir, err := c.dataDir()
-	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	fmt.Fprintln(os.Stderr, "подключение... (Ctrl+C — отключиться)")
-	err = runner.Run(ctx, runner.Options{Exe: exe, Config: cfg, DataDir: dataDir, Output: os.Stdout})
-	if err == nil {
-		fmt.Fprintln(os.Stderr, "отключено")
-	}
-	return err
-}
-
-func cmdCheck(args []string) error {
-	c, err := parseFlags("check", args, nil)
-	if err != nil {
-		return err
-	}
-	in, cfg, err := c.load()
-	if err != nil {
-		return err
-	}
-	exe, release, err := c.singBox(in)
-	if err != nil {
-		return err
-	}
-	defer release()
-	if err := checkSingBox(exe, in); err != nil {
-		return err
-	}
-	dataDir, err := c.dataDir()
-	if err != nil {
-		return err
-	}
-	if err := runner.Check(exe, cfg, dataDir); err != nil {
-		return err
-	}
-	fmt.Println("профиль в порядке")
-	return nil
-}
-
-func cmdConfig(args []string) error {
-	var out string
-	c, err := parseFlags("config", args, func(fs *flag.FlagSet) {
-		fs.StringVar(&out, "o", "", "записать в файл вместо stdout (в конфиге есть ключи и пароли!)")
+	svc := &Service{}
+	wapp := application.New(application.Options{
+		Name:        "vpn-client",
+		Description: "VPN с раздельной маршрутизацией",
+		Icon:        icon("app"),
+		Services:    []application.Service{application.NewService(svc)},
+		Assets:      application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "com.github.maks-ard.vpn-client",
+			// Повторный запуск (ярлык, автозапуск) просто показывает окно.
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) { svc.ShowWindow() },
+		},
+		Windows: application.WindowsOptions{},
+		// Перед выходом отключаем VPN, чтобы sing-box убрал маршруты.
+		OnShutdown: func() { svc.shutdown() },
 	})
+
+	window := wapp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:                       "main",
+		Title:                      "vpn-client",
+		Width:                      400,
+		Height:                     680,
+		Frameless:                  true,
+		DisableResize:              true,
+		Hidden:                     autostart,
+		InitialPosition:            application.WindowCentered,
+		BackgroundColour:           application.NewRGB(15, 17, 21),
+		DefaultContextMenuDisabled: true,
+		MaximiseButtonState:        application.ButtonHidden,
+		URL:                        "/",
+		Windows: application.WindowsWindow{
+			Theme: application.Dark,
+		},
+	})
+
+	manager, err := app.NewManager(paths, svc.onState)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
-	_, cfg, err := c.load()
-	if err != nil {
-		return err
+	svc.init(wapp, window, manager, version)
+
+	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		if manager.Settings().CloseToTray && !svc.quitting.Load() {
+			window.Hide()
+			e.Cancel()
+		}
+	})
+
+	svc.setupTray()
+
+	if manager.Settings().ConnectOnStart {
+		manager.Connect()
 	}
-	cfg = append(cfg, '\n')
-	if out == "" {
-		_, err = os.Stdout.Write(cfg)
-		return err
+
+	if err := wapp.Run(); err != nil {
+		log.Fatal(err)
 	}
-	return os.WriteFile(out, cfg, 0o600)
 }

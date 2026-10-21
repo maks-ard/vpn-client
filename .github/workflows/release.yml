@@ -32,7 +32,7 @@ jobs:
           unzip -q sb.zip
           # sing-box встраивается внутрь vpnclient.exe (тег embed_singbox)
           cp "${name}/sing-box.exe" internal/singboxbin/sing-box.exe
-      - name: windows resources (манифест с правами администратора, версия)
+      - name: windows resources (иконка, манифест с правами администратора, версия)
         run: |
           go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json \
             --arch ${{ matrix.arch }} --out cmd/vpnclient/rsrc \
@@ -40,8 +40,9 @@ jobs:
       - name: build
         run: |
           exe=vpnclient-${GITHUB_REF_NAME}-windows-${{ matrix.arch }}.exe
+          # -H windowsgui: приложение с окном, без консоли.
           GOOS=windows GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -tags embed_singbox \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -ldflags "-s -w -H windowsgui -X main.version=${GITHUB_REF_NAME} -X github.com/maks-ard/vpn-client/internal/singboxbin.Version=${SING_BOX_VERSION}" \
             -o "${exe}" ./cmd/vpnclient
           sha256sum "${exe}" > "${exe}.sha256"
       - uses: actions/upload-artifact@v4
@@ -65,8 +66,9 @@ jobs:
           ## Скачать
 
           \`vpnclient-${GITHUB_REF_NAME}-windows-amd64.exe\` — для обычных компьютеров, \`arm64\` — для ноутбуков на ARM.
-          Это один файл: sing-box ${SING_BOX_VERSION} встроен внутрь. Windows при запуске запросит права администратора,
-          они нужны для перехвата трафика.
+          Это один файл, установка не нужна: sing-box ${SING_BOX_VERSION} встроен внутрь.
+          Windows при запуске запросит права администратора — они нужны для перехвата трафика.
+          Дальше: «Настройки» → вставьте ссылку на подписку и выберите файл .ovpn → кнопка подключения на главной.
 
           sing-box распространяется по лицензии GPLv3: https://github.com/SagerNet/sing-box
           EOF
