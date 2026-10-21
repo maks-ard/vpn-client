@@ -55,6 +55,17 @@ type Input struct {
 	// Subscription — подписка, если серверы взяты из неё.
 	Subscription *subscription.Subscription
 	OpenVPN      *ovpn.Config
+	// API — включить Clash API (статистика, выбор сервера) на этом адресе.
+	// Если nil, используется singbox.clash_api из профиля.
+	API *API
+	// Inbound заменяет TUN другим inbound (например, mixed): нужно для
+	// тестов, где нет прав на создание TUN.
+	Inbound M
+}
+
+type API struct {
+	Addr   string
+	Secret string
 }
 
 // Load читает профиль и связанные с ним файлы, а подписку скачивает
@@ -173,10 +184,10 @@ func build(in *Input) (M, error) {
 	cfg := M{
 		"log":          M{"level": p.SingBox.LogLevel, "timestamp": true},
 		"dns":          dns,
-		"inbounds":     []any{tunInbound(p)},
+		"inbounds":     []any{inbound(in)},
 		"outbounds":    outbounds,
 		"route":        routeSection(in, hasProxy, hasCorp, final),
-		"experimental": experimental(p),
+		"experimental": experimental(in),
 	}
 	if len(endpoints) > 0 {
 		cfg["endpoints"] = endpoints
@@ -188,6 +199,13 @@ func build(in *Input) (M, error) {
 		cfg["http_clients"] = []any{M{"tag": "rule-sets"}}
 	}
 	return cfg, nil
+}
+
+func inbound(in *Input) M {
+	if in.Inbound != nil {
+		return in.Inbound
+	}
+	return tunInbound(in.Profile)
 }
 
 func tunInbound(p *profile.Profile) M {
@@ -360,10 +378,13 @@ func httpsDNSServer(s string) (M, error) {
 	return server, nil
 }
 
-func experimental(p *profile.Profile) M {
+func experimental(in *Input) M {
 	exp := M{"cache_file": M{"enabled": true, "path": "cache.db"}}
-	if p.SingBox.ClashAPI != "" {
-		exp["clash_api"] = M{"external_controller": p.SingBox.ClashAPI}
+	switch {
+	case in.API != nil:
+		exp["clash_api"] = M{"external_controller": in.API.Addr, "secret": in.API.Secret}
+	case in.Profile.SingBox.ClashAPI != "":
+		exp["clash_api"] = M{"external_controller": in.Profile.SingBox.ClashAPI}
 	}
 	return exp
 }

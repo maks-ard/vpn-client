@@ -105,17 +105,24 @@ func Load(path string) (*Profile, error) {
 }
 
 func Parse(data []byte, dir string) (*Profile, error) {
-	p := &Profile{dir: dir}
+	p := &Profile{}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(p); err != nil {
 		return nil, err
 	}
-	p.applyDefaults()
-	if err := p.validate(); err != nil {
+	if err := p.Normalize(dir); err != nil {
 		return nil, err
 	}
 	return p, nil
+}
+
+// Normalize применяет значения по умолчанию и проверяет профиль, собранный
+// в коде (например, из настроек приложения). dir — каталог для относительных путей.
+func (p *Profile) Normalize(dir string) error {
+	p.dir = dir
+	p.applyDefaults()
+	return p.validate()
 }
 
 // Resolve возвращает путь относительно каталога профиля.
@@ -131,6 +138,9 @@ func (p *Profile) RussiaDirect() bool {
 }
 
 func (p *Profile) applyDefaults() {
+	if p.Subscription != nil && p.Subscription.URL == "" {
+		p.Subscription = nil
+	}
 	if p.DNS.Direct == "" {
 		p.DNS.Direct = "77.88.8.8"
 	}
@@ -152,9 +162,6 @@ func (p *Profile) applyDefaults() {
 }
 
 func (p *Profile) validate() error {
-	if p.Subscription != nil && p.Subscription.URL == "" {
-		p.Subscription = nil
-	}
 	if p.VLESS == "" && p.Subscription == nil && p.OpenVPN == nil {
 		return fmt.Errorf("нужен хотя бы один из разделов: subscription, vless или openvpn")
 	}
