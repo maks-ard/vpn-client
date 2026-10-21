@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 // и трей. Само подключение держит служба, окно управляет ей через ipc.
 type Service struct {
 	version string
+	log     *slog.Logger
 	client  *ipc.Client
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -56,10 +58,11 @@ type Service struct {
 	relaunched atomic.Bool
 }
 
-func newService(version string) *Service {
+func newService(version string, logger *slog.Logger) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
 		version:   version,
+		log:       logger,
 		client:    ipc.NewClient(ipc.Dial),
 		ctx:       ctx,
 		cancel:    cancel,
@@ -284,6 +287,9 @@ func (s *Service) setState(st app.State) {
 }
 
 func (s *Service) setServiceStatus(status, msg string) {
+	if status != "" || msg != "" {
+		s.log.Info("состояние службы", "status", status, "msg", msg)
+	}
 	st := app.State{Status: app.StatusDisconnected, Service: status, Error: msg}
 	if msg != "" {
 		st.Status = app.StatusError
@@ -324,6 +330,7 @@ func (s *Service) supervise() {
 		s.mu.Lock()
 		s.info = info
 		s.mu.Unlock()
+		s.log.Info("служба на связи", "версия", info.Version, "exe", info.Exe)
 
 		switch {
 		case update.Newer(s.version, info.Version) && !triedInstall:
@@ -390,7 +397,9 @@ func (s *Service) install() {
 	}
 	_ = os.Remove(installErrorFile())
 	s.ShowWindow()
+	s.log.Info("установка службы", "exe", self)
 	code, err := winsvc.RunElevated(uintptr(s.window.NativeWindow()), self, "--install")
+	s.log.Info("установка завершилась", "code", code, "err", err)
 	switch {
 	case errors.Is(err, winsvc.ErrCancelled):
 		s.setServiceStatus("missing", "Без службы VPN работать не будет. Нажмите кнопку, чтобы установить её.")
@@ -432,6 +441,7 @@ func (s *Service) relaunch(exe string) {
 	if exe == "" {
 		exe = winsvc.InstalledExe()
 	}
+	s.log.Info("перезапуск окна", "exe", exe)
 	cmd := exec.Command(exe, "--wait-pid", strconv.Itoa(os.Getpid()))
 	if !s.window.IsVisible() {
 		cmd.Args = append(cmd.Args, "--autostart")

@@ -12,9 +12,12 @@ package main
 
 import (
 	"embed"
+	"io"
 	"io/fs"
 	"log"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"time"
@@ -93,19 +96,46 @@ func waitProcess(pid uint32, timeout time.Duration) {
 	_, _ = windows.WaitForSingleObject(h, uint32(timeout.Milliseconds()))
 }
 
+// guiDir — данные окна: %LOCALAPPDATA%\vpn-client (журнал окна, WebView2).
+func guiDir() string {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	return filepath.Join(dir, "vpn-client")
+}
+
 func runGUI(autostart bool) {
+	dir := guiDir()
+	_ = os.MkdirAll(dir, 0o700)
+	logger := openGUILog(filepath.Join(dir, "gui.log"))
+	logger.Info("запуск окна", "версия", version, "args", os.Args[1:])
+
 	assets, err := fs.Sub(frontend, "frontend")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	gui := newService(version)
+	gui := newService(version, logger)
 	wapp := application.New(application.Options{
 		Name:        "vpn-client",
 		Description: "VPN с раздельной маршрутизацией",
 		Icon:        icon("app"),
-		Services:    []application.Service{application.NewService(gui)},
-		Assets:      application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
+		Logger:      logger,
+		LogLevel:    slog.LevelInfo,
+		ErrorHandler: func(err error) {
+			logger.Error("ошибка Wails", "err", err)
+		},
+		PanicHandler: func(p *application.PanicDetails) {
+			logger.Error("паника", "err", p.Error, "stack", p.StackTrace)
+		},
+		Windows: application.WindowsOptions{
+			// Своя папка WebView2: старые версии работали с правами
+			// администратора, и их папка в %APPDATA% окну без прав недоступна.
+			WebviewUserDataPath: filepath.Join(dir, "webview2"),
+		},
+		Services: []application.Service{application.NewService(gui)},
+		Assets:   application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: "com.github.maks-ard.vpn-client",
 			// Повторный запуск (ярлык, автозапуск) просто показывает окно.
@@ -148,4 +178,16 @@ func runGUI(autostart bool) {
 	if err := wapp.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// openGUILog пишет журнал окна; большой журнал начинаем заново.
+func openGUILog(path string) *slog.Logger {
+	if st, err := os.Stat(path); err == nil && st.Size() > 1<<20 {
+		_ = os.Rename(path, path+".old")
+	}
+	var w io.Writer = io.Discard
+	if f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+		w = f
+	}
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
