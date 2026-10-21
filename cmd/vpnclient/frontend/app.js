@@ -75,7 +75,7 @@ function renderMain() {
     sub = state.error || "Нажмите, чтобы установить службу VPN. Это нужно один раз.";
   } else if (state.service === "installing") {
     title = "Установка…";
-    sub = "Подтвердите запрос Windows на права администратора";
+    sub = "Подтвердите запрос Windows на права администратора. Не видно запроса — нажмите на мигающий значок на панели задач.";
   } else if (state.service === "unavailable") {
     title = "Подождите…";
     sub = "Подключаемся к службе VPN";

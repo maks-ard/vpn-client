@@ -389,7 +389,8 @@ func (s *Service) install() {
 		return
 	}
 	_ = os.Remove(installErrorFile())
-	code, err := winsvc.RunElevated(self, "--install")
+	s.ShowWindow()
+	code, err := winsvc.RunElevated(uintptr(s.window.NativeWindow()), self, "--install")
 	switch {
 	case errors.Is(err, winsvc.ErrCancelled):
 		s.setServiceStatus("missing", "Без службы VPN работать не будет. Нажмите кнопку, чтобы установить её.")

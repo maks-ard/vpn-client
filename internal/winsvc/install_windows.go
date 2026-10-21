@@ -95,7 +95,7 @@ func Install() error {
 	}
 
 	// Версии 0.1.x запускали окно с правами администратора через планировщик.
-	_ = hidden("schtasks.exe", "/Delete", "/F", "/TN", Name).Run()
+	_ = runWithTimeout(hidden("schtasks.exe", "/Delete", "/F", "/TN", Name), 20*time.Second)
 	_ = createShortcut(target)
 	return nil
 }
@@ -227,7 +227,23 @@ func createShortcut(target string) error {
 	script := fmt.Sprintf(
 		"$s=(New-Object -ComObject WScript.Shell).CreateShortcut(%s);$s.TargetPath=%s;$s.WorkingDirectory=%s;$s.Description='vpn-client';$s.Save()",
 		q(shortcutPath()), q(target), q(filepath.Dir(target)))
-	return hidden("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script).Run()
+	return runWithTimeout(hidden("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script), 30*time.Second)
+}
+
+// runWithTimeout не даёт вспомогательной программе подвесить установку.
+func runWithTimeout(cmd *exec.Cmd, d time.Duration) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("%s не завершился за %s", filepath.Base(cmd.Path), d)
+	}
 }
 
 func hidden(name string, args ...string) *exec.Cmd {
@@ -240,8 +256,10 @@ func hidden(name string, args ...string) *exec.Cmd {
 var ErrCancelled = errors.New("установка отменена в запросе прав администратора")
 
 var (
-	shell32             = windows.NewLazySystemDLL("shell32.dll")
-	procShellExecuteExW = shell32.NewProc("ShellExecuteExW")
+	shell32                 = windows.NewLazySystemDLL("shell32.dll")
+	procShellExecuteExW     = shell32.NewProc("ShellExecuteExW")
+	user32                  = windows.NewLazySystemDLL("user32.dll")
+	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
 )
 
 type shellExecuteInfo struct {
@@ -268,8 +286,10 @@ const (
 )
 
 // RunElevated запускает exe с правами администратора (запрос UAC) и ждёт
-// завершения. Возвращает код выхода.
-func RunElevated(exe string, args string) (uint32, error) {
+// завершения. Возвращает код выхода. owner — окно, поверх которого Windows
+// покажет запрос: без него запрос часто открывается в фоне и только мигает
+// на панели задач.
+func RunElevated(owner uintptr, exe string, args string) (uint32, error) {
 	verb, _ := windows.UTF16PtrFromString("runas")
 	file, err := windows.UTF16PtrFromString(exe)
 	if err != nil {
@@ -279,7 +299,12 @@ func RunElevated(exe string, args string) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
+	if owner != 0 {
+		// Запрос прав появится на переднем плане, только если наше окно сейчас активно.
+		procSetForegroundWindow.Call(owner)
+	}
 	info := shellExecuteInfo{
+		hwnd:         windows.Handle(owner),
 		fMask:        seeMaskNoCloseProcess | seeMaskNoUI,
 		lpVerb:       verb,
 		lpFile:       file,
