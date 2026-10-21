@@ -80,3 +80,8 @@ GOOS=windows go build -ldflags "-H windowsgui" -o vpnclient.exe ./cmd/vpnclient
 - [x] Автозапуск при входе в Windows, подключение при запуске
 - [ ] Флаги стран в Windows (эмодзи-флаги Windows не рисует), уведомления
 - [ ] Другие протоколы из подписок (Trojan, Shadowsocks, Hysteria2), kill switch
+
+## Лицензия
+
+[GPL-3.0](LICENSE). В релизную сборку встроен [sing-box](https://github.com/SagerNet/sing-box)
+(тоже GPL-3.0), исходный код используемой версии — в его репозитории.
