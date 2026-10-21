@@ -48,6 +48,8 @@ internal/singbox/    сборка JSON-конфига sing-box из profile + vl
 internal/runner/     запуск и остановка sing-box; *_windows.go / *_other.go
 profiles/example.yaml  документированный пример профиля
 scripts/*.ps1        сборка под Windows и загрузка sing-box
+scripts/connect.cmd  запуск с повышением прав, кладётся в релизный архив
+.github/workflows/   ci.yml (каждый push и PR), release.yml (теги v*)
 ```
 
 Зависимости направлены строго вниз: `cmd` → `singbox` → `profile`/`ovpn`/`vless`;
@@ -100,6 +102,18 @@ scripts/*.ps1        сборка под Windows и загрузка sing-box
 - Конфиг передаётся в sing-box через stdin (`-c stdin`), чтобы секреты не
   оставались на диске. `vpnclient config -o` пишет файл с правами `0600`.
 - Не отключай `strict_route` в TUN: на Windows он защищает от DNS-утечек.
+
+## Релизы
+
+- Релиз собирает `.github/workflows/release.yml` при пуше тега `vX.Y.Z`
+  (SemVer: пока `v0.x`, API и формат профиля могут меняться).
+  В релиз попадают zip-архивы для windows-amd64 и windows-arm64 с
+  `vpnclient.exe`, официальным `sing-box.exe`, `connect.cmd` и примером профиля,
+  а также их `.sha256`.
+- Версия sing-box для релизов задаётся в `SING_BOX_VERSION` в `release.yml`.
+  При её изменении обнови версию в `ci.yml`, `scripts/fetch-singbox.ps1` и в этом файле.
+- Версия приложения подставляется через `-X main.version=<тег>`, руками её не правь.
+- Тег ставь только на коммит, у которого прошёл CI.
 
 ## Git
 

@@ -21,7 +21,17 @@ profile.yaml + corp.ovpn ──► vpnclient ──► конфиг sing-box (ч
                                                                      └─ direct → остальное
 ```
 
-## Быстрый старт
+## Установка из релиза
+
+1. Скачайте архив `vpnclient-vX.Y.Z-windows-amd64.zip` со страницы
+   [Releases](https://github.com/maks-ard/vpn-client/releases/latest) и распакуйте его.
+   В архиве лежат `vpnclient.exe`, `sing-box.exe`, `connect.cmd` и `profile.example.yaml`.
+2. Переименуйте `profile.example.yaml` в `profile.yaml`, впишите ссылку `vless://…`
+   и положите рядом свой `.ovpn`.
+3. Запустите `connect.cmd`: он запросит права администратора и подключит VPN.
+   Чтобы отключиться, закройте окно или нажмите Ctrl+C.
+
+## Сборка из исходников
 
 1. Соберите клиент (нужен Go 1.26+) и скачайте sing-box:
    ```powershell
