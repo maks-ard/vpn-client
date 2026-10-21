@@ -23,13 +23,13 @@ profile.yaml + corp.ovpn ──► vpnclient ──► конфиг sing-box (ч
 
 ## Установка из релиза
 
-1. Скачайте архив `vpnclient-vX.Y.Z-windows-amd64.zip` со страницы
-   [Releases](https://github.com/maks-ard/vpn-client/releases/latest) и распакуйте его.
-   В архиве лежат `vpnclient.exe`, `sing-box.exe`, `connect.cmd` и `profile.example.yaml`.
-2. Переименуйте `profile.example.yaml` в `profile.yaml`, впишите ссылку `vless://…`
-   и положите рядом свой `.ovpn`.
-3. Запустите `connect.cmd`: он запросит права администратора и подключит VPN.
-   Чтобы отключиться, закройте окно или нажмите Ctrl+C.
+Скачайте `vpnclient-vX.Y.Z-windows-amd64.exe` со страницы
+[Releases](https://github.com/maks-ard/vpn-client/releases/latest). Это один файл:
+sing-box встроен внутрь и при запуске распаковывается в папку `data` рядом с программой.
+Windows запросит права администратора, они нужны для перехвата трафика.
+
+> Графический интерфейс с иконкой в трее в разработке; до него программа
+> работает из консоли (`vpnclient run`, см. ниже).
 
 ## Сборка из исходников
 

@@ -48,7 +48,8 @@ internal/singbox/    сборка JSON-конфига sing-box из profile + vl
 internal/runner/     запуск и остановка sing-box; *_windows.go / *_other.go
 profiles/example.yaml  документированный пример профиля
 scripts/*.ps1        сборка под Windows и загрузка sing-box
-scripts/connect.cmd  запуск с повышением прав, кладётся в релизный архив
+internal/singboxbin/  sing-box.exe, встроенный в релизную сборку (тег embed_singbox)
+winres/winres.json   манифест (requireAdministrator) и версия exe для go-winres
 .github/workflows/   ci.yml (каждый push и PR), release.yml (теги v*)
 ```
 
@@ -107,9 +108,12 @@ scripts/connect.cmd  запуск с повышением прав, кладёт
 
 - Релиз собирает `.github/workflows/release.yml` при пуше тега `vX.Y.Z`
   (SemVer: пока `v0.x`, API и формат профиля могут меняться).
-  В релиз попадают zip-архивы для windows-amd64 и windows-arm64 с
-  `vpnclient.exe`, официальным `sing-box.exe`, `connect.cmd` и примером профиля,
-  а также их `.sha256`.
+  В релиз попадает **один exe** на архитектуру (windows-amd64, windows-arm64)
+  и его `.sha256`: официальный `sing-box.exe` встраивается через `go:embed`
+  (тег `embed_singbox`), манифест с `requireAdministrator` — через go-winres.
+- Встроенный sing-box распаковывается в `data/` и держится открытым без права
+  записи (`runner.Install`), пока работает: программа запущена от администратора,
+  и подменить исполняемый файл между проверкой хэша и запуском нельзя.
 - Версия sing-box для релизов задаётся в `SING_BOX_VERSION` в `release.yml`.
   При её изменении обнови версию в `ci.yml`, `scripts/fetch-singbox.ps1` и в этом файле.
 - Версия приложения подставляется через `-X main.version=<тег>`, руками её не правь.

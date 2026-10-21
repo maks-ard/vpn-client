@@ -24,3 +24,7 @@ cache.db
 .DS_Store
 Thumbs.db
 /.bin/
+
+# Релизная сборка: встроенный sing-box и ресурсы Windows
+/internal/singboxbin/sing-box.exe
+*.syso

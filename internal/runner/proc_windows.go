@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"os"
 	"os/exec"
 	"syscall"
 	"unsafe"
@@ -47,4 +48,21 @@ func interrupt(cmd *exec.Cmd) error {
 // IsElevated сообщает, запущен ли процесс с правами администратора.
 func IsElevated() bool {
 	return windows.GetCurrentProcessToken().IsElevated()
+}
+
+const isWindows = true
+
+// openLocked открывает файл, запрещая другим процессам запись и удаление,
+// пока дескриптор открыт. Запуск exe при этом разрешён.
+func openLocked(path string) (*os.File, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil,
+		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(h), path), nil
 }

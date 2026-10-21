@@ -25,31 +25,29 @@ jobs:
           go-version-file: go.mod
       - name: test
         run: go test ./...
-      - name: build vpnclient.exe
-        run: |
-          mkdir -p pkg
-          GOOS=windows GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-            -o pkg/vpnclient.exe ./cmd/vpnclient
       - name: download sing-box
         run: |
           name=sing-box-${SING_BOX_VERSION}-windows-${{ matrix.arch }}
           curl -fsSL -o sb.zip "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/${name}.zip"
           unzip -q sb.zip
-          cp "${name}/sing-box.exe" pkg/
-          cp "${name}/LICENSE" pkg/sing-box-LICENSE.txt
-      - name: package
+          # sing-box встраивается внутрь vpnclient.exe (тег embed_singbox)
+          cp "${name}/sing-box.exe" internal/singboxbin/sing-box.exe
+      - name: windows resources (манифест с правами администратора, версия)
         run: |
-          cp profiles/example.yaml pkg/profile.example.yaml
-          cp scripts/connect.cmd pkg/connect.cmd
-          cp README.md pkg/README.md
-          zip_name=vpnclient-${GITHUB_REF_NAME}-windows-${{ matrix.arch }}.zip
-          (cd pkg && zip -q -r "../${zip_name}" .)
-          sha256sum "${zip_name}" > "${zip_name}.sha256"
+          go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json \
+            --arch ${{ matrix.arch }} --out cmd/vpnclient/rsrc \
+            --product-version "${GITHUB_REF_NAME}" --file-version "${GITHUB_REF_NAME}"
+      - name: build
+        run: |
+          exe=vpnclient-${GITHUB_REF_NAME}-windows-${{ matrix.arch }}.exe
+          GOOS=windows GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -tags embed_singbox \
+            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o "${exe}" ./cmd/vpnclient
+          sha256sum "${exe}" > "${exe}.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.arch }}
-          path: vpnclient-*.zip*
+          path: vpnclient-*.exe*
 
   release:
     needs: build
@@ -64,13 +62,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<EOF
-          ## Установка на Windows
+          ## Скачать
 
-          1. Скачайте \`vpnclient-${GITHUB_REF_NAME}-windows-amd64.zip\` (для ARM-ноутбуков — \`arm64\`) и распакуйте в отдельную папку.
-          2. Переименуйте \`profile.example.yaml\` в \`profile.yaml\`, впишите ссылку \`vless://…\` и положите рядом свой \`.ovpn\`.
-          3. Запустите \`connect.cmd\` — он попросит права администратора и подключит VPN. Закройте окно или нажмите Ctrl+C, чтобы отключиться.
+          \`vpnclient-${GITHUB_REF_NAME}-windows-amd64.exe\` — для обычных компьютеров, \`arm64\` — для ноутбуков на ARM.
+          Это один файл: sing-box ${SING_BOX_VERSION} встроен внутрь. Windows при запуске запросит права администратора,
+          они нужны для перехвата трафика.
 
-          В архиве sing-box ${SING_BOX_VERSION} (официальная сборка, лицензия GPLv3 — \`sing-box-LICENSE.txt\`).
+          sing-box распространяется по лицензии GPLv3: https://github.com/SagerNet/sing-box
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \

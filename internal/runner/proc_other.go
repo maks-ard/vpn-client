@@ -21,3 +21,9 @@ func interrupt(cmd *exec.Cmd) error {
 func IsElevated() bool {
 	return os.Geteuid() == 0
 }
+
+const isWindows = false
+
+func openLocked(path string) (*os.File, error) {
+	return os.Open(path)
+}

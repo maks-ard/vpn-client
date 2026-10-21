@@ -15,6 +15,7 @@ import (
 
 	"github.com/maks-ard/vpn-client/internal/runner"
 	"github.com/maks-ard/vpn-client/internal/singbox"
+	"github.com/maks-ard/vpn-client/internal/singboxbin"
 )
 
 var version = "dev"
@@ -95,15 +96,24 @@ func (c *common) load() (*singbox.Input, []byte, error) {
 	return in, cfg, nil
 }
 
-func (c *common) singBoxPath(in *singbox.Input) string {
+// singBox возвращает путь к sing-box. Релизная сборка несёт его внутри себя
+// и распаковывает в data; release нужно вызвать после остановки sing-box.
+func (c *common) singBox(in *singbox.Input) (path string, release func(), err error) {
 	if p := in.Profile.SingBox.Path; p != "" {
-		return in.Profile.Resolve(p)
+		return in.Profile.Resolve(p), func() {}, nil
+	}
+	if data := singboxbin.Data(); data != nil {
+		dir, err := c.dataDir()
+		if err != nil {
+			return "", nil, err
+		}
+		return runner.Install(dir, data)
 	}
 	name := "sing-box"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	return filepath.Join(c.exeDir, name)
+	return filepath.Join(c.exeDir, name), func() {}, nil
 }
 
 func (c *common) dataDir() (string, error) {
@@ -138,7 +148,11 @@ func cmdRun(args []string) error {
 	if !runner.IsElevated() {
 		return errors.New("для TUN нужны права администратора: запустите консоль от имени администратора")
 	}
-	exe := c.singBoxPath(in)
+	exe, release, err := c.singBox(in)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := checkSingBox(exe, in); err != nil {
 		return err
 	}
@@ -166,7 +180,11 @@ func cmdCheck(args []string) error {
 	if err != nil {
 		return err
 	}
-	exe := c.singBoxPath(in)
+	exe, release, err := c.singBox(in)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := checkSingBox(exe, in); err != nil {
 		return err
 	}
