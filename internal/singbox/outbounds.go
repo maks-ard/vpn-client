@@ -11,8 +11,10 @@ import (
 	"github.com/maks-ard/vpn-client/internal/vless"
 )
 
-// URL для замера задержки до серверов.
-const urlTestURL = "https://www.gstatic.com/generate_204"
+// URLTestURL — адрес для проверки серверов. Берём ресурс, который в России
+// заблокирован или замедлен: сервер с выходом в России или под блокировками
+// тест не пройдёт и не будет выбран как «самый быстрый».
+const URLTestURL = "https://www.youtube.com/generate_204"
 
 // proxyOutbounds: один сервер — это сразу outbound proxy; несколько —
 // selector proxy с вариантом auto (urltest выбирает самый быстрый) и
@@ -54,7 +56,7 @@ func proxyOutbounds(in *Input) ([]any, error) {
 			"type":      "urltest",
 			"tag":       TagAuto,
 			"outbounds": tags,
-			"url":       urlTestURL,
+			"url":       URLTestURL,
 			"interval":  "5m",
 			"tolerance": 50,
 		},

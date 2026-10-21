@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/maks-ard/vpn-client/internal/singbox"
 )
 
 // clash — минимальный клиент Clash API, который sing-box поднимает на
@@ -102,14 +104,14 @@ func (c *clash) delay(ctx context.Context, name string) (int, error) {
 	var out struct {
 		Delay int `json:"delay"`
 	}
-	q := url.Values{"url": {"https://www.gstatic.com/generate_204"}, "timeout": {"5000"}}
+	q := url.Values{"url": {singbox.URLTestURL}, "timeout": {"5000"}}
 	err := c.do(ctx, http.MethodGet, "/proxies/"+url.PathEscape(name)+"/delay?"+q.Encode(), nil, &out)
 	return out.Delay, err
 }
 
 // groupDelay замеряет все серверы группы сразу.
 func (c *clash) groupDelay(ctx context.Context, group string) error {
-	q := url.Values{"url": {"https://www.gstatic.com/generate_204"}, "timeout": {"5000"}}
+	q := url.Values{"url": {singbox.URLTestURL}, "timeout": {"5000"}}
 	return c.do(ctx, http.MethodGet, "/group/"+url.PathEscape(group)+"/delay?"+q.Encode(), nil, nil)
 }
 
