@@ -148,14 +148,21 @@ func parseXrayJSON(text string) (links []*vless.Link, skipped []string, err erro
 			found[0].link.Name = nameOr(cfg.Remarks, found[0].link.Name)
 			single = append(single, found[0])
 		default:
-			// Балансировщик («Авто»): его серверы обычно повторяют отдельные
-			// конфиги, а выбор самого быстрого делаем сами.
+			// Балансировщик («Авто»): его серверы повторяют отдельные конфиги,
+			// а выбор самого быстрого делаем сами.
 			multi = append(multi, found...)
 		}
 	}
 
+	// Серверы балансировщика берём, только если отдельных конфигов нет:
+	// адреса в нём служебные (rmn-…), поэтому дубли не распознаются,
+	// а имена — технические теги outbound'ов.
+	candidates := single
+	if len(candidates) == 0 {
+		candidates = multi
+	}
 	seen := map[string]bool{}
-	for _, c := range append(single, multi...) {
+	for _, c := range candidates {
 		if seen[c.key] {
 			continue
 		}

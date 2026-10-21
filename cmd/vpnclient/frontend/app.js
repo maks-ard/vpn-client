@@ -156,7 +156,11 @@ function renderServers() {
     ping.className = "server-ping" + (item.delay > 0 ? (item.delay < 150 ? " good" : item.delay > 400 ? " slow" : "") : "");
     ping.textContent = item.delay > 0 ? `${item.delay} мс` : "—";
     btn.append(name, ping);
-    btn.addEventListener("click", () => svc("SelectServer", item.name).catch(showError));
+    btn.addEventListener("click", () => {
+      // Сервер переключается сразу, подтверждать не нужно.
+      $("sheet").hidden = true;
+      svc("SelectServer", item.name).catch(showError);
+    });
     list.append(btn);
   }
 }

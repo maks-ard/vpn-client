@@ -42,12 +42,11 @@ func TestParseXrayJSON(t *testing.T) {
 	for _, s := range sub.Servers {
 		names = append(names, s.Name)
 	}
-	// Одиночные конфиги идут первыми под своими именами, из балансировщика
-	// добавляется только сервер, которого нет отдельно.
-	if strings.Join(names, ",") != "🇳🇱 Нидерланды,🇩🇪 Германия,extra" {
+	// Берутся отдельные конфиги под своими именами, балансировщик не нужен.
+	if strings.Join(names, ",") != "🇳🇱 Нидерланды,🇩🇪 Германия" {
 		t.Fatalf("серверы: %q", names)
 	}
-	nl, de, extra := sub.Servers[0], sub.Servers[1], sub.Servers[2]
+	nl, de := sub.Servers[0], sub.Servers[1]
 	if nl.Server != "203.0.113.10" || nl.Port != 443 || nl.Security != "reality" || nl.PublicKey != "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0" ||
 		nl.ShortID != "ab12" || nl.SNI != "www.microsoft.com" || nl.Flow != "xtls-rprx-vision" || nl.Fingerprint != "chrome" {
 		t.Errorf("NL: %+v", nl)
@@ -56,7 +55,20 @@ func TestParseXrayJSON(t *testing.T) {
 		de.SNI != "de.example.com" || de.Security != "tls" || len(de.ALPN) != 1 {
 		t.Errorf("DE: %+v", de)
 	}
-	if extra.Server != "198.51.100.5" || extra.Transport != "grpc" || extra.ServiceName != "svc" || extra.PublicKey != "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0" {
+
+	// Если в подписке только балансировщик — серверы берутся из него.
+	start := strings.Index(xraySub, `{"remarks":"⚡ Авто"`)
+	end := strings.Index(xraySub, `{"remarks":"🇳🇱 Нидерланды"`)
+	only, err := Parse([]byte("["+strings.TrimRight(strings.TrimSpace(xraySub[start:end]), ",")+"]"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(only.Servers) != 3 {
+		t.Fatalf("из балансировщика: %d серверов", len(only.Servers))
+	}
+	extra := only.Servers[2]
+	if extra.Name != "extra" || extra.Server != "198.51.100.5" || extra.Transport != "grpc" || extra.ServiceName != "svc" ||
+		extra.PublicKey != "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0" {
 		t.Errorf("extra (плоский формат, password): %+v", extra)
 	}
 	joined := strings.Join(sub.Skipped, "\n")

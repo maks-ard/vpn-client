@@ -63,6 +63,9 @@ func proxyOutbounds(in *Input) ([]any, error) {
 			"tag":       TagProxy,
 			"outbounds": append([]string{TagAuto}, tags...),
 			"default":   selected,
+			// При ручной смене сервера рвём старые соединения, чтобы они
+			// сразу переподключились через новый.
+			"interrupt_exist_connections": true,
 		},
 	)
 	return out, nil
