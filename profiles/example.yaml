@@ -1,0 +1,43 @@
+# Пример профиля vpnclient. Скопируйте в profile.yaml рядом с vpnclient.exe
+# и впишите свои данные. profile.yaml и *.ovpn в git не попадают.
+
+# Ссылка на VLESS-сервер: через него идёт зарубежный трафик.
+# Поддерживаются security=reality/tls/none и транспорты tcp, ws, grpc, http, httpupgrade.
+vless: "vless://UUID@server.example.com:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=PUBLIC_KEY&sid=SHORT_ID&type=tcp#my-server"
+
+# Корпоративный OpenVPN. Подключается встроенным в sing-box клиентом,
+# отдельный OpenVPN ставить не нужно.
+openvpn:
+  config: corp.ovpn        # путь относительно этого файла
+  # Если в .ovpn есть auth-user-pass без файла с паролем:
+  username: ""
+  password: ""
+
+# Что отправлять через OpenVPN. Подсети и DNS-домены, которые присылает
+# сервер, добавляются автоматически.
+corporate:
+  domains:
+    - corp.example.com      # вместе со всеми поддоменами
+  subnets: []              # например: [10.0.0.0/8]
+
+routing:
+  # true: российские сайты (.ru/.su/.рф, geosite и geoip RU) напрямую, остальное через VLESS.
+  # false: через VLESS всё, кроме корпоративного и direct_domains.
+  russia_direct: true
+  direct_domains: []       # всегда напрямую
+  proxy_domains: []        # всегда через VLESS, даже если домен российский
+  direct_processes: []     # программы мимо VPN, например: [qbittorrent.exe]
+
+dns:
+  direct: 77.88.8.8        # для российских доменов, напрямую
+  remote: 1.1.1.1          # DNS-over-HTTPS через VLESS для остальных
+
+tun:
+  stack: mixed             # system | gvisor | mixed
+  mtu: 9000
+  ipv6: false              # false: IPv6 блокируется, чтобы не было утечек мимо VPN
+
+singbox:
+  path: ""                 # по умолчанию sing-box.exe рядом с vpnclient.exe
+  log_level: warn          # trace | debug | info | warn | error
+  clash_api: ""            # например 127.0.0.1:9090 для статистики

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  SING_BOX_VERSION: v1.14.3
+  SING_BOX_TAGS: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_clash_api,with_openvpn,badlinkname,tfogo_checklinkname0
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: |
+          go vet ./...
+          GOOS=windows go vet ./...
+      - name: sing-box (для проверки сгенерированного конфига)
+        run: |
+          GOTOOLCHAIN=auto GOBIN=$RUNNER_TEMP go install -tags "$SING_BOX_TAGS" -ldflags "-checklinkname=0" \
+            github.com/sagernet/sing-box/cmd/sing-box@$SING_BOX_VERSION
+      - name: test
+        run: go test -race ./...
+        env:
+          VPNCLIENT_SINGBOX: ${{ runner.temp }}/sing-box
+      - name: build windows
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_SHA::7}" -o dist/vpnclient.exe ./cmd/vpnclient
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vpnclient-windows-amd64
+          path: dist/vpnclient.exe

@@ -1,0 +1,12 @@
+vless: "vless://11111111-2222-3333-4444-555555555555@vless.example.com:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&sid=0123456789abcdef&type=tcp#test"
+openvpn:
+  config: corp.ovpn
+  username: user
+  password: secret
+corporate:
+  domains: [corp.example.com]
+  subnets: [10.10.0.0/16]
+routing:
+  proxy_domains: [example.ru]
+  direct_domains: [example.com]
+  direct_processes: [qbittorrent.exe]

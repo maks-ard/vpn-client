@@ -1,0 +1,26 @@
+# Личные данные: профили, конфиги OpenVPN, ключи и пароли
+/profile.yaml
+/profiles/*.yaml
+!/profiles/example.yaml
+*.ovpn
+!/internal/singbox/testdata/*.ovpn
+*.key
+*.p12
+auth.txt
+
+# Сборка и рантайм
+/dist/
+/bin/
+/data/
+sing-box
+sing-box.exe
+cache.db
+*.exe
+
+# Редакторы и ОС
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+/.bin/
