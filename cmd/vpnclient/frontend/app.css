@@ -127,10 +127,14 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .pill svg { stroke: var(--muted); stroke-width: 2.2; }
 
 .notice {
-  font-size: 12px; color: var(--amber); line-height: 1.4;
-  padding: 10px 12px; border-radius: 8px; background: var(--amber-soft);
-  margin-top: -8px; user-select: text;
+  display: flex; flex-direction: column; gap: 6px; text-align: left; width: 100%;
+  font-size: 12px; color: var(--amber); line-height: 1.4; white-space: pre-line;
+  padding: 10px 12px; border-radius: 8px; border: 0; background: var(--amber-soft);
+  margin-top: -8px;
 }
+.notice:hover { background: rgba(245, 184, 75, 0.22); }
+.copy-hint { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; white-space: normal; }
+.copyable { cursor: copy; }
 
 /* Карточки */
 .routes, .group { display: flex; flex-direction: column; gap: 8px; }
@@ -191,7 +195,7 @@ button.card:hover { border-color: var(--border-strong); background: #1A1D24; }
 .link-btn:hover { color: var(--text); }
 .hint { font-size: 12px; color: var(--muted); line-height: 1.4; display: flex; gap: 8px; align-items: center; }
 .hint.ok svg { stroke: var(--accent); stroke-width: 2.2; }
-.hint.bad { color: var(--red); }
+.hint.bad { color: var(--red); cursor: copy; }
 .hint.pad { padding: 0 4px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -269,8 +273,9 @@ button.card:hover { border-color: var(--border-strong); background: #1A1D24; }
 .server-ping.good { color: var(--accent); }
 .server-ping.slow { color: var(--amber); }
 
-.error-toast {
+.toast {
   position: fixed; left: 16px; right: 16px; bottom: 76px; z-index: 20;
-  padding: 10px 12px; border-radius: 8px; background: #3A1D1D; border: 1px solid #6B2C2C;
-  color: #FFD9D9; font-size: 13px; line-height: 1.4; user-select: text;
+  padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.4;
 }
+.toast.error { background: #3A1D1D; border: 1px solid #6B2C2C; color: #FFD9D9; cursor: copy; }
+.toast.info { left: auto; right: 16px; background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text); }

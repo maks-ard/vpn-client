@@ -47,7 +47,13 @@
       </div>
     </section>
 
-    <div class="notice" id="notice" hidden></div>
+    <button class="notice copyable" id="notice" title="Нажмите, чтобы скопировать" hidden>
+      <span id="notice-text"></span>
+      <span class="copy-hint">
+        <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>
+        Нажмите, чтобы скопировать
+      </span>
+    </button>
 
     <section class="routes">
       <div class="section-label">Маршруты</div>
@@ -175,7 +181,7 @@
     </section>
   </main>
 
-  <div class="error-toast" id="toast" role="alert" hidden></div>
+  <div class="toast" id="toast" role="alert" hidden></div>
 
   <nav class="nav" aria-label="Разделы">
     <button class="nav-btn active" data-page="main">

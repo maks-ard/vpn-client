@@ -16,8 +16,10 @@ const xraySub = `[
     "streamSettings":{"network":"ws","security":"tls","tlsSettings":{"serverName":"de.example.com","alpn":["http/1.1"]},"wsSettings":{"path":"/ws","headers":{"Host":"de.example.com"}}}},
    {"tag":"extra","protocol":"vless","settings":{"address":"198.51.100.5","port":443,"id":"33333333-3333-3333-3333-333333333333","encryption":"none"},
     "streamSettings":{"network":"grpc","security":"reality","realitySettings":{"serverName":"a.com","password":"jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0"},"grpcSettings":{"serviceName":"svc"}}},
+   {"tag":"xh","protocol":"vless","settings":{"vnext":[{"address":"xh.example.com","port":443,"users":[{"id":"66666666-6666-6666-6666-666666666666"}]}]},
+    "streamSettings":{"network":"xhttp","security":"tls"}},
    {"tag":"direct","protocol":"freedom"},{"tag":"block","protocol":"blackhole"}],
-  "routing":{"balancers":[{"tag":"auto","selector":["nl","de","extra"]}]}},
+  "routing":{"balancers":[{"tag":"auto","selector":["nl","de","extra","xh"]}]}},
  {"remarks":"🇳🇱 Нидерланды","dns":{"hosts":{"rmn-nl":"203.0.113.10"}},
   "outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"rmn-nl","port":443,"users":[{"id":"11111111-1111-1111-1111-111111111111","flow":"xtls-rprx-vision","encryption":"none"}]}]},
     "streamSettings":{"network":"tcp","security":"reality","realitySettings":{"serverName":"www.microsoft.com","fingerprint":"chrome","publicKey":"jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0","shortId":"ab12"}}},
@@ -58,7 +60,7 @@ func TestParseXrayJSON(t *testing.T) {
 		t.Errorf("extra (плоский формат, password): %+v", extra)
 	}
 	joined := strings.Join(sub.Skipped, "\n")
-	if !strings.Contains(joined, "XHTTP") || !strings.Contains(joined, "trojan") {
+	if !strings.Contains(joined, "Финляндия XHTTP") || !strings.Contains(joined, "trojan") || len(sub.Skipped) != 2 {
 		t.Errorf("skipped: %v", sub.Skipped)
 	}
 }

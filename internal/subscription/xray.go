@@ -105,28 +105,42 @@ func parseXrayJSON(text string) (links []*vless.Link, skipped []string, err erro
 		key  string
 	}
 	var single, multi []candidate
+	seenSkip := map[string]bool{}
 	for _, cfg := range configs {
 		var found []candidate
+		var cfgSkipped []string
+		proxies := 0
 		for _, ob := range cfg.Outbounds {
+			switch ob.Protocol {
+			case "freedom", "blackhole", "dns", "loopback", "":
+				continue
+			}
+			proxies++
 			if ob.Protocol != "vless" {
-				switch ob.Protocol {
-				case "freedom", "blackhole", "dns", "loopback", "":
-				default:
-					skipped = append(skipped, fmt.Sprintf("%s: протокол %s пока не поддерживается", nameOr(cfg.Remarks, ob.Tag), ob.Protocol))
-				}
+				cfgSkipped = append(cfgSkipped, fmt.Sprintf("%s: протокол %s пока не поддерживается", nameOr(cfg.Remarks, ob.Tag), ob.Protocol))
 				continue
 			}
 			raw, err := xrayToVLESSURL(ob, cfg)
 			if err != nil {
-				skipped = append(skipped, fmt.Sprintf("%s: %v", nameOr(cfg.Remarks, ob.Tag), err))
+				cfgSkipped = append(cfgSkipped, fmt.Sprintf("%s: %v", nameOr(cfg.Remarks, ob.Tag), err))
 				continue
 			}
 			link, err := vless.Parse(raw)
 			if err != nil {
-				skipped = append(skipped, fmt.Sprintf("%s: %v", nameOr(cfg.Remarks, ob.Tag), err))
+				cfgSkipped = append(cfgSkipped, fmt.Sprintf("%s: %v", nameOr(cfg.Remarks, ob.Tag), err))
 				continue
 			}
 			found = append(found, candidate{link: link, key: serverKey(link)})
+		}
+		// Пропуски внутри балансировщика не показываем: те же серверы есть
+		// отдельными конфигами и сообщат о себе сами.
+		if proxies <= 1 {
+			for _, msg := range cfgSkipped {
+				if !seenSkip[msg] {
+					seenSkip[msg] = true
+					skipped = append(skipped, msg)
+				}
+			}
 		}
 		switch len(found) {
 		case 0:

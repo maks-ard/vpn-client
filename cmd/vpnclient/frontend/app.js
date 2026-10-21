@@ -69,6 +69,8 @@ function renderMain() {
   if (st === "error") sub = state.error || "Не удалось подключиться";
   if (st === "connected") sub = elapsed(validDate(state.connectedAt) || new Date());
   $("status-sub").textContent = sub;
+  $("status-sub").classList.toggle("copyable", st === "error");
+  $("status-sub").title = st === "error" ? "Нажмите, чтобы скопировать" : "";
 
   $("speed").hidden = st !== "connected";
   $("down").textContent = speed(state.down);
@@ -76,7 +78,9 @@ function renderMain() {
 
   const warnings = state.warnings || [];
   $("notice").hidden = warnings.length === 0;
-  $("notice").textContent = warnings.slice(0, 2).join("\n");
+  $("notice-text").textContent = warnings.slice(0, 2).join("\n") +
+    (warnings.length > 2 ? `\nи ещё ${warnings.length - 2}` : "");
+  $("notice").dataset.copy = warnings.join("\n");
 
   // Корпоративная сеть
   const corp = state.corp;
@@ -298,15 +302,42 @@ $("btn-minimise").addEventListener("click", () => Window.Minimise());
 $("btn-close").addEventListener("click", () => svc("CloseWindow"));
 
 let toastTimer = 0;
-function showError(e) {
-  const text = typeof e === "string" ? e : (e && e.message) || String(e);
+function showToast(text, kind) {
   const toast = $("toast");
   toast.textContent = text;
+  toast.className = "toast " + kind;
+  toast.title = kind === "error" ? "Нажмите, чтобы скопировать" : "";
   toast.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.hidden = true; }, 6000);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, kind === "error" ? 8000 : 1500);
 }
-$("toast").addEventListener("click", () => { $("toast").hidden = true; });
+
+function showError(e) {
+  showToast(typeof e === "string" ? e : (e && e.message) || String(e), "error");
+}
+
+// Тексты ошибок и предупреждений копируются по нажатию — удобно для отладки.
+async function copy(text) {
+  if (!text) return;
+  try {
+    await Clipboard.SetText(text);
+    showToast("Скопировано", "info");
+  } catch (e) {
+    showError(e);
+  }
+}
+
+$("toast").addEventListener("click", () => {
+  if ($("toast").classList.contains("error")) copy($("toast").textContent);
+  else $("toast").hidden = true;
+});
+$("notice").addEventListener("click", () => copy($("notice").dataset.copy));
+$("status-sub").addEventListener("click", () => {
+  if (state && state.status === "error") copy(state.error);
+});
+$("link-info").addEventListener("click", () => {
+  if ($("link-info").classList.contains("bad")) copy($("link-info").textContent);
+});
 
 document.addEventListener("contextmenu", (e) => {
   if (!(e.target instanceof HTMLInputElement)) e.preventDefault();

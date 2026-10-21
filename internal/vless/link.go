@@ -119,7 +119,7 @@ func Parse(raw string) (*Link, error) {
 	case "http", "h2":
 		l.Transport = "http"
 	case "xhttp", "splithttp":
-		return nil, fmt.Errorf("транспорт XHTTP не поддерживается sing-box, переключите на сервере inbound на tcp/ws/grpc")
+		return nil, fmt.Errorf("транспорт XHTTP не поддерживается sing-box")
 	case "kcp", "mkcp", "quic":
 		return nil, fmt.Errorf("транспорт %q не поддерживается", l.Transport)
 	default:
