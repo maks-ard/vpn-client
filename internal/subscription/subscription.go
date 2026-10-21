@@ -116,6 +116,13 @@ func Parse(body []byte, header http.Header) (*Subscription, error) {
 	if strings.HasPrefix(text, "<") {
 		return nil, errors.New("вместо подписки пришла веб-страница; проверьте ссылку")
 	}
+	if isJSON(text) {
+		links, skipped, err := parseXrayJSON(text)
+		if err != nil {
+			return nil, err
+		}
+		return finish(&Subscription{Info: parseInfo(header), Skipped: skipped}, links)
+	}
 	if !strings.Contains(text, "://") {
 		decoded, err := decodeBase64(text)
 		if err != nil {
@@ -125,14 +132,17 @@ func Parse(body []byte, header http.Header) (*Subscription, error) {
 	}
 
 	sub := &Subscription{Info: parseInfo(header)}
-	names := map[string]int{}
+	var links []*vless.Link
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		if !strings.HasPrefix(line, "vless://") {
-			scheme, _, _ := strings.Cut(line, "://")
+			scheme, _, ok := strings.Cut(line, "://")
+			if !ok || len(scheme) > 20 {
+				scheme = "строка"
+			}
 			sub.Skipped = append(sub.Skipped, scheme+": протокол пока не поддерживается")
 			continue
 		}
@@ -141,7 +151,16 @@ func Parse(body []byte, header http.Header) (*Subscription, error) {
 			sub.Skipped = append(sub.Skipped, err.Error())
 			continue
 		}
-		// Имена серверов становятся тегами в sing-box и должны быть уникальны.
+		links = append(links, link)
+	}
+	return finish(sub, links)
+}
+
+// finish даёт серверам уникальные имена (они становятся тегами в sing-box)
+// и проверяет, что хоть один сервер есть.
+func finish(sub *Subscription, links []*vless.Link) (*Subscription, error) {
+	names := map[string]int{}
+	for _, link := range links {
 		if link.Name == "" {
 			link.Name = link.Server
 		}
