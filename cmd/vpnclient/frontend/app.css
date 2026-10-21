@@ -196,7 +196,9 @@ button.card:hover { border-color: var(--border-strong); background: #1A1D24; }
 .hint { font-size: 12px; color: var(--muted); line-height: 1.4; display: flex; gap: 8px; align-items: center; }
 .hint.ok svg { stroke: var(--accent); stroke-width: 2.2; }
 .hint.bad { color: var(--red); cursor: copy; }
-.hint.pad { padding: 0 4px; }
+.hint.pad, .row.pad { padding: 0 4px; }
+.version-row { justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.version-row .link-btn { align-self: center; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {

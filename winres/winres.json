@@ -16,7 +16,7 @@
         },
         "description": "vpn-client",
         "minimum-os": "win10",
-        "execution-level": "administrator",
+        "execution-level": "as invoker",
         "ui-access": false,
         "auto-elevate": false,
         "dpi-awareness": "per monitor v2",

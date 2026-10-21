@@ -50,7 +50,11 @@ func TestImportOVPNInlinesFiles(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(src, "work.ovpn"), []byte("client\ndev tun\nremote vpn.example.com 1194\nca ca.crt\ncert client.crt\nkey client.key\ntls-auth ta.key 1\nauth-user-pass pass.txt\n"), 0o600)
 
 	p := testPaths(t)
-	info, err := importOVPN(p, filepath.Join(src, "work.ovpn"))
+	name, data, err := PrepareOVPN(filepath.Join(src, "work.ovpn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := importOVPN(p, name, data)
 	if err != nil {
 		t.Fatal(err)
 	}

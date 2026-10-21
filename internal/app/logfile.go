@@ -102,3 +102,24 @@ func (l *logFile) tailHint() string {
 	}
 	return ""
 }
+
+// tailBytes читает последние max байт журнала вместе с прошлым файлом.
+func (l *logFile) tailBytes(max int64) ([]byte, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []byte
+	for _, path := range []string{l.path + ".old", l.path} {
+		data, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		out = append(out, data...)
+	}
+	if int64(len(out)) > max {
+		out = out[int64(len(out))-max:]
+		if i := strings.IndexByte(string(out), '\n'); i >= 0 {
+			out = out[i+1:]
+		}
+	}
+	return out, nil
+}

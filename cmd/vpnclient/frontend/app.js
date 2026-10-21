@@ -59,15 +59,29 @@ function renderMain() {
 
   const configured = state.proxy.enabled || state.corp.enabled;
   const power = $("power");
-  power.setAttribute("aria-label", st === "disconnected" || st === "error" ? "Подключить" : "Отключить");
+  power.setAttribute("aria-label", state.service === "missing" ? "Установить службу"
+    : st === "disconnected" || st === "error" ? "Подключить" : "Отключить");
 
   const titles = { disconnected: "Отключено", connecting: "Подключение…", connected: "Подключено", error: "Ошибка" };
-  $("status-title").textContent = titles[st];
+  let title = titles[st];
   let sub = "";
   if (st === "disconnected") sub = configured ? "Нажмите, чтобы подключиться" : "Добавьте подписку или .ovpn в настройках";
   if (st === "connecting") sub = "Запускаем туннель";
   if (st === "error") sub = state.error || "Не удалось подключиться";
   if (st === "connected") sub = elapsed(validDate(state.connectedAt) || new Date());
+  // Служба (она держит VPN) ещё не установлена или не отвечает.
+  if (state.service === "missing") {
+    title = "Нужна установка";
+    sub = state.error || "Нажмите, чтобы установить службу VPN. Это нужно один раз.";
+  } else if (state.service === "installing") {
+    title = "Установка…";
+    sub = "Подтвердите запрос Windows на права администратора";
+  } else if (state.service === "unavailable") {
+    title = "Подождите…";
+    sub = "Подключаемся к службе VPN";
+  }
+  app.classList.toggle("connecting", st === "connecting" || state.service === "installing" || state.service === "unavailable");
+  $("status-title").textContent = title;
   $("status-sub").textContent = sub;
   $("status-sub").classList.toggle("copyable", st === "error");
   $("status-sub").title = st === "error" ? "Нажмите, чтобы скопировать" : "";
@@ -292,6 +306,13 @@ $("opt-russia").addEventListener("change", (e) => save({ russiaDirect: e.target.
 $("opt-autostart").addEventListener("change", (e) => save({ autostart: e.target.checked }));
 $("opt-connect").addEventListener("change", (e) => save({ connectOnStart: e.target.checked }));
 $("opt-tray").addEventListener("change", (e) => save({ closeToTray: e.target.checked }));
+$("btn-update").addEventListener("click", async () => {
+  try {
+    await svc("CheckUpdate");
+    showToast("Проверяем обновления…", "info");
+    setTimeout(() => reloadSettings().catch(() => {}), 5000);
+  } catch (e) { showError(e); }
+});
 
 // ---------- навигация и окно ----------
 

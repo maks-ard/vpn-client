@@ -3,6 +3,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -160,23 +161,30 @@ func (s Settings) profile(p Paths) (*profile.Profile, error) {
 	return prof, nil
 }
 
-// importOVPN проверяет .ovpn и копирует его к себе: исходный файл может
-// потом переехать или удалиться.
-func importOVPN(p Paths, src string) (OVPNInfo, error) {
-	data, err := os.ReadFile(src)
+// PrepareOVPN читает .ovpn, проверяет его и встраивает в него ключи из
+// соседних файлов. Вызывается на стороне окна: у службы может не быть
+// доступа к папке пользователя, и исходный файл может потом переехать.
+func PrepareOVPN(src string) (name string, data []byte, err error) {
+	raw, err := os.ReadFile(src)
 	if err != nil {
-		return OVPNInfo{}, err
+		return "", nil, err
 	}
-	// Пути к ключам считаются от исходного файла, поэтому проверяем его там же,
-	// а сохраняем со всеми файлами, встроенными внутрь.
 	cfg, err := ovpn.ParseFile(src)
 	if err != nil {
+		return "", nil, err
+	}
+	return filepath.Base(src), inlineOVPN(raw, cfg), nil
+}
+
+// importOVPN сохраняет подготовленный (самодостаточный) .ovpn.
+func importOVPN(p Paths, name string, data []byte) (OVPNInfo, error) {
+	if _, err := ovpn.Parse(bytes.NewReader(data), ""); err != nil {
 		return OVPNInfo{}, err
 	}
-	if err := writeFileAtomic(p.ovpnFile(), inlineOVPN(data, cfg)); err != nil {
+	if err := writeFileAtomic(p.ovpnFile(), data); err != nil {
 		return OVPNInfo{}, err
 	}
-	if err := writeFileAtomic(p.ovpnNameFile(), []byte(filepath.Base(src))); err != nil {
+	if err := writeFileAtomic(p.ovpnNameFile(), []byte(filepath.Base(name))); err != nil {
 		return OVPNInfo{}, err
 	}
 	return ovpnInfo(p), nil

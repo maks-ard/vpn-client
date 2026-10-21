@@ -38,6 +38,9 @@ type State struct {
 	Proxy ProxyState `json:"proxy"`
 	// Warnings — некритичные замечания (подписка из кэша, директивы .ovpn).
 	Warnings []string `json:"warnings,omitempty"`
+	// Service заполняет окно, когда со службой что-то не так:
+	// "missing" — не установлена, "installing" — ставится, "unavailable" — не отвечает.
+	Service string `json:"service,omitempty"`
 }
 
 type CorpState struct {
@@ -121,12 +124,6 @@ func (m *Manager) SaveSettings(s Settings) error {
 	if s.Link != old.Link {
 		s.Server = ""
 	}
-	if s.Autostart != old.Autostart {
-		if err := SetAutostart(s.Autostart); err != nil {
-			m.mu.Unlock()
-			return err
-		}
-	}
 	if err := saveSettings(m.paths, s); err != nil {
 		m.mu.Unlock()
 		return err
@@ -153,8 +150,9 @@ func routingChanged(a, b Settings) bool {
 		a.RussiaDirect != b.RussiaDirect || strings.Join(a.CorpDomains, ",") != strings.Join(b.CorpDomains, ",")
 }
 
-func (m *Manager) ImportOVPN(path string) (OVPNInfo, error) {
-	info, err := importOVPN(m.paths, path)
+// ImportOVPN сохраняет .ovpn, подготовленный PrepareOVPN.
+func (m *Manager) ImportOVPN(name string, data []byte) (OVPNInfo, error) {
+	info, err := importOVPN(m.paths, name, data)
 	if err != nil {
 		return OVPNInfo{}, err
 	}
@@ -484,6 +482,14 @@ func (m *Manager) TestServers() {
 }
 
 func (m *Manager) LogFile() string { return m.paths.LogFile() }
+
+// Log возвращает конец журнала (не больше max байт).
+func (m *Manager) Log(max int64) ([]byte, error) {
+	return m.log.tailBytes(max)
+}
+
+// Logf пишет сообщение в журнал приложения.
+func (m *Manager) Logf(format string, a ...any) { m.log.Printf(format, a...) }
 
 func (m *Manager) update(fn func(*State)) {
 	m.mu.Lock()

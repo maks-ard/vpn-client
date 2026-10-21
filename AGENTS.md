@@ -40,12 +40,16 @@ GOTOOLCHAIN=auto GOBIN=$PWD/.bin go install \
 ## Структура
 
 ```
-cmd/vpnclient/       GUI-приложение (Wails v3, только windows): main.go, service.go
+cmd/vpnclient/       один exe в нескольких ролях (только windows): окно и трей (Wails v3,
+                     обычные права), --service (служба), --install/--uninstall/--restart-service
   frontend/          HTML/CSS/JS без сборщика; Go вызывается через /wails/runtime.js
   icons/             иконка приложения и 4 состояния иконки в трее (PNG)
 cmd/vpnctl/          консольная утилита разработчика: run | check | config | version
-internal/app/        логика приложения без GUI: настройки, Manager (подключение,
-                     статус через Clash API, журнал), автозапуск
+internal/app/        логика без GUI: настройки, Manager (подключение, статус через
+                     Clash API, журнал); работает внутри службы
+internal/ipc/        HTTP поверх named pipe \\.\pipe\vpn-client: сервер в службе, клиент в окне
+internal/winsvc/     служба Windows: запуск, установка в Program Files, ACL, UAC, перезапуск
+internal/update/     автообновление из GitHub Releases с проверкой SHA-256
 internal/profile/    профиль (YAML для vpnctl; GUI собирает его из настроек)
 internal/subscription/  подписки: загрузка, base64, subscription-userinfo, кэш
 internal/ovpn/       парсер .ovpn → ovpn.Config (без зависимостей от sing-box)
@@ -58,7 +62,10 @@ profiles/example.yaml  пример профиля для vpnctl
 .github/workflows/   ci.yml (каждый push и PR), release.yml (теги v*)
 ```
 
-Зависимости направлены строго вниз: `cmd` → `app` → `singbox` →
+Архитектура: окно (без прав) ⇄ ipc ⇄ служба (SYSTEM) → app.Manager → sing-box.
+Окно не читает файлы службы напрямую — всё через API, даже журнал.
+
+Зависимости направлены строго вниз: `cmd` → `winsvc`/`ipc` → `app` → `singbox` →
 `profile`/`subscription`/`ovpn`/`vless`; `runner` ни от чего внутреннего не зависит.
 Wails импортирует только `cmd/vpnclient`: `internal/app` тестируется без GUI.
 
@@ -132,6 +139,11 @@ Wails импортирует только `cmd/vpnclient`: `internal/app` тес
   В релиз попадает **один exe** на архитектуру (windows-amd64, windows-arm64)
   и его `.sha256`: официальный `sing-box.exe` встраивается через `go:embed`
   (тег `embed_singbox`), манифест с `requireAdministrator` — через go-winres.
+- Автообновление: служба раз в 6 часов смотрит `releases/latest`, качает
+  `vpnclient-<тег>-windows-<arch>.exe` и `.sha256`, переименовывает текущий exe в
+  `.old` и ставит новый, затем перезапускается через `--restart-service`.
+  **Не меняй имена файлов в release.yml** — на них завязаны уже установленные копии.
+  Сборки с версией не вида `vX.Y.Z` (например, `dev`) не обновляются.
 - Встроенный sing-box распаковывается в `data/` и держится открытым без права
   записи (`runner.Install`), пока работает: программа запущена от администратора,
   и подменить исполняемый файл между проверкой хэша и запуском нельзя.

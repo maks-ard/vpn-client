@@ -3,24 +3,37 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/maks-ard/vpn-client/internal/app"
-	"github.com/maks-ard/vpn-client/internal/singboxbin"
+	"github.com/maks-ard/vpn-client/internal/ipc"
+	"github.com/maks-ard/vpn-client/internal/update"
+	"github.com/maks-ard/vpn-client/internal/winsvc"
 )
 
 // Service — методы, которые вызывает фронтенд (Call.ByName("main.Service.X")),
-// плюс трей. Вся логика — в internal/app.
+// и трей. Само подключение держит служба, окно управляет ей через ipc.
 type Service struct {
-	wapp    *application.App
-	window  application.Window
-	manager *app.Manager
 	version string
+	client  *ipc.Client
+	ctx     context.Context
+	cancel  context.CancelFunc
+
+	wapp   *application.App
+	window application.Window
 
 	tray       *application.SystemTray
 	menu       *application.Menu
@@ -28,16 +41,43 @@ type Service struct {
 	toggleItem *application.MenuItem
 	russiaItem *application.MenuItem
 
+	mu        sync.Mutex
+	state     app.State
+	cached    app.Settings
+	info      ipc.Info
+	installCh chan struct{}
+
 	trayMu      sync.Mutex
-	lastStatus  app.Status
+	lastIcon    string
 	lastTooltip string
 	lastMenu    string
-	quitting    atomic.Bool
+
+	quitting   atomic.Bool
+	relaunched atomic.Bool
 }
 
-func (s *Service) init(wapp *application.App, window application.Window, m *app.Manager, version string) {
-	s.wapp, s.window, s.manager, s.version = wapp, window, m, version
+func newService(version string) *Service {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Service{
+		version:   version,
+		client:    ipc.NewClient(ipc.Dial),
+		ctx:       ctx,
+		cancel:    cancel,
+		state:     app.State{Status: app.StatusDisconnected, Service: "unavailable"},
+		cached:    app.Settings{CloseToTray: true, RussiaDirect: true},
+		installCh: make(chan struct{}, 1),
+	}
 }
+
+func (s *Service) init(wapp *application.App, window application.Window) {
+	s.wapp, s.window = wapp, window
+}
+
+func (s *Service) call() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(s.ctx, 30*time.Second)
+}
+
+// ---------- методы для фронтенда ----------
 
 // SettingsView — всё, что нужно экрану настроек.
 type SettingsView struct {
@@ -46,32 +86,96 @@ type SettingsView struct {
 	Version  string       `json:"version"`
 }
 
-func (s *Service) State() app.State { return s.manager.State() }
+func (s *Service) State() app.State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state
+}
 
-func (s *Service) Settings() SettingsView {
-	v := "Версия " + s.version
-	if singboxbin.Version != "" {
-		v += " · sing-box " + singboxbin.Version
+func (s *Service) Settings() (SettingsView, error) {
+	ctx, cancel := s.call()
+	defer cancel()
+	view, err := s.client.Settings(ctx)
+	if err != nil {
+		s.mu.Lock()
+		cached := s.cached
+		s.mu.Unlock()
+		return SettingsView{Settings: cached, Version: s.versionLine()}, nil
 	}
-	return SettingsView{Settings: s.manager.Settings(), OVPN: s.manager.OVPN(), Version: v}
+	info, infoErr := s.client.Info(ctx)
+	s.mu.Lock()
+	s.cached = view.Settings
+	if infoErr == nil {
+		s.info = info
+	}
+	s.mu.Unlock()
+	return SettingsView{Settings: view.Settings, OVPN: view.OVPN, Version: s.versionLine()}, nil
+}
+
+func (s *Service) versionLine() string {
+	s.mu.Lock()
+	info := s.info
+	s.mu.Unlock()
+	v := "Версия " + s.version
+	if info.SingBox != "" {
+		v += " · sing-box " + info.SingBox
+	}
+	if info.Update != "" {
+		v += " · " + info.Update
+	}
+	return v
 }
 
 func (s *Service) SaveSettings(settings app.Settings) error {
-	if err := s.manager.SaveSettings(settings); err != nil {
+	prev := s.settings()
+	ctx, cancel := s.call()
+	defer cancel()
+	if err := s.client.SaveSettings(ctx, settings); err != nil {
 		return err
 	}
-	s.refreshTray(s.manager.State())
+	if settings.Autostart != prev.Autostart {
+		if err := app.SetAutostart(settings.Autostart, s.guiExe()); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	s.cached = settings
+	st := s.state
+	s.mu.Unlock()
+	s.refreshTray(st)
 	return nil
 }
 
-func (s *Service) Toggle() { go s.manager.Toggle() }
+func (s *Service) Toggle() error {
+	if s.State().Service == "missing" {
+		s.InstallService()
+		return nil
+	}
+	ctx, cancel := s.call()
+	defer cancel()
+	return s.client.Toggle(ctx)
+}
 
-func (s *Service) SelectServer(name string) error { return s.manager.SelectServer(name) }
+func (s *Service) SelectServer(name string) error {
+	ctx, cancel := s.call()
+	defer cancel()
+	return s.client.SelectServer(ctx, name)
+}
 
-func (s *Service) TestServers() { s.manager.TestServers() }
+func (s *Service) TestServers() error {
+	ctx, cancel := s.call()
+	defer cancel()
+	return s.client.TestServers(ctx)
+}
 
-// ChooseOVPN открывает диалог выбора файла. Возвращает nil, если пользователь
-// передумал.
+func (s *Service) CheckUpdate() error {
+	ctx, cancel := s.call()
+	defer cancel()
+	return s.client.CheckUpdate(ctx)
+}
+
+// ChooseOVPN открывает диалог выбора файла. Возвращает nil, если
+// пользователь передумал.
 func (s *Service) ChooseOVPN() (*app.OVPNInfo, error) {
 	path, err := s.wapp.Dialog.OpenFile().
 		SetTitle("Файл конфигурации OpenVPN").
@@ -81,18 +185,36 @@ func (s *Service) ChooseOVPN() (*app.OVPNInfo, error) {
 	if err != nil || path == "" {
 		return nil, err
 	}
-	info, err := s.manager.ImportOVPN(path)
+	name, data, err := app.PrepareOVPN(path)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось загрузить .ovpn: %w", err)
+	}
+	ctx, cancel := s.call()
+	defer cancel()
+	info, err := s.client.ImportOVPN(ctx, name, data)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось загрузить .ovpn: %w", err)
 	}
 	return &info, nil
 }
 
-func (s *Service) RemoveOVPN() error { return s.manager.RemoveOVPN() }
+func (s *Service) RemoveOVPN() error {
+	ctx, cancel := s.call()
+	defer cancel()
+	return s.client.RemoveOVPN(ctx)
+}
+
+// InstallService запускает установку службы (по кнопке в окне).
+func (s *Service) InstallService() {
+	select {
+	case s.installCh <- struct{}{}:
+	default:
+	}
+}
 
 // CloseWindow — крестик в заголовке окна.
 func (s *Service) CloseWindow() {
-	if s.manager.Settings().CloseToTray {
+	if s.settings().CloseToTray {
 		s.window.Hide()
 		return
 	}
@@ -105,6 +227,7 @@ func (s *Service) ShowWindow() {
 	s.window.Focus()
 }
 
+// Quit — «Выход» в трее: отключаем VPN и закрываем окно.
 func (s *Service) Quit() {
 	s.quitting.Store(true)
 	s.wapp.Quit()
@@ -112,46 +235,285 @@ func (s *Service) Quit() {
 
 func (s *Service) shutdown() {
 	s.quitting.Store(true)
-	s.manager.Disconnect()
+	if !s.relaunched.Load() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = s.client.Disconnect(ctx)
+		cancel()
+	}
+	s.cancel()
 }
 
-// onState вызывается менеджером при каждом изменении состояния.
-func (s *Service) onState(st app.State) {
-	if s.wapp == nil {
-		return
+func (s *Service) OpenLog() {
+	ctx, cancel := s.call()
+	defer cancel()
+	data, err := s.client.Log(ctx)
+	if err != nil {
+		data = []byte("Служба недоступна: " + err.Error())
 	}
-	s.wapp.Event.Emit("state", st)
+	path := filepath.Join(os.TempDir(), "vpn-client-log.txt")
+	if err := os.WriteFile(path, data, 0o600); err == nil {
+		_ = app.OpenFile(path)
+	}
+}
+
+func (s *Service) settings() app.Settings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cached
+}
+
+// guiExe — какой exe ставить в автозапуск: установленный, если он есть.
+func (s *Service) guiExe() string {
+	if _, err := os.Stat(winsvc.InstalledExe()); err == nil {
+		return winsvc.InstalledExe()
+	}
+	exe, _ := os.Executable()
+	return exe
+}
+
+// ---------- связь со службой ----------
+
+func (s *Service) setState(st app.State) {
+	s.mu.Lock()
+	s.state = st
+	s.mu.Unlock()
+	if s.wapp != nil {
+		s.wapp.Event.Emit("state", st)
+	}
 	s.refreshTray(st)
 }
+
+func (s *Service) setServiceStatus(status, msg string) {
+	st := app.State{Status: app.StatusDisconnected, Service: status, Error: msg}
+	if msg != "" {
+		st.Status = app.StatusError
+	}
+	s.setState(st)
+}
+
+// supervise держит связь со службой: ставит её при первом запуске,
+// перезапускает окно после обновления и переподключается, если служба
+// перезапускалась.
+func (s *Service) supervise() {
+	triedInstall := false
+	firstConnect := true
+	for s.ctx.Err() == nil {
+		ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
+		info, err := s.client.Info(ctx)
+		cancel()
+
+		if err != nil {
+			installed, _ := winsvc.ServiceRunning()
+			if !installed {
+				// Первый раз ставим сами, дальше — по кнопке в окне.
+				if triedInstall {
+					if s.State().Service != "missing" {
+						s.setServiceStatus("missing", "")
+					}
+					s.waitInstallRequest()
+				}
+				triedInstall = true
+				s.install()
+				continue
+			}
+			s.setServiceStatus("unavailable", "")
+			sleep(s.ctx, 2*time.Second)
+			continue
+		}
+
+		s.mu.Lock()
+		s.info = info
+		s.mu.Unlock()
+
+		switch {
+		case update.Newer(s.version, info.Version) && !triedInstall:
+			// Окно новее службы (скачали новую версию вручную) — обновляем службу.
+			triedInstall = true
+			s.install()
+			continue
+		case update.Newer(info.Version, s.version):
+			// Служба обновилась сама — перезапускаем окно из новой версии.
+			s.relaunch(info.Exe)
+			return
+		}
+
+		if firstConnect {
+			firstConnect = false
+			s.migrateOldSettings()
+			s.afterConnect()
+		}
+
+		err = s.client.Events(s.ctx, s.setState)
+		if s.ctx.Err() != nil {
+			return
+		}
+		_ = err
+		s.setServiceStatus("unavailable", "")
+		sleep(s.ctx, time.Second)
+	}
+}
+
+// afterConnect — однократные действия при первом подключении к службе.
+func (s *Service) afterConnect() {
+	view, err := s.Settings()
+	if err != nil {
+		return
+	}
+	if view.Settings.Autostart {
+		// Путь мог поменяться (установка в Program Files).
+		_ = app.SetAutostart(true, s.guiExe())
+	}
+	if view.Settings.ConnectOnStart {
+		ctx, cancel := s.call()
+		st, err := s.client.State(ctx)
+		if err == nil && st.Status == app.StatusDisconnected {
+			_ = s.client.Toggle(ctx)
+		}
+		cancel()
+	}
+}
+
+func (s *Service) waitInstallRequest() {
+	select {
+	case <-s.ctx.Done():
+	case <-s.installCh:
+	}
+}
+
+// install ставит или обновляет службу с запросом прав администратора.
+func (s *Service) install() {
+	s.setServiceStatus("installing", "")
+	self, err := os.Executable()
+	if err != nil {
+		s.setServiceStatus("missing", err.Error())
+		return
+	}
+	_ = os.Remove(installErrorFile())
+	code, err := winsvc.RunElevated(self, "--install")
+	switch {
+	case errors.Is(err, winsvc.ErrCancelled):
+		s.setServiceStatus("missing", "Без службы VPN работать не будет. Нажмите кнопку, чтобы установить её.")
+		return
+	case err != nil:
+		s.setServiceStatus("missing", "Установка службы: "+err.Error())
+		return
+	case code != 0:
+		msg := fmt.Sprintf("Установка службы не удалась (код %d)", code)
+		if text, err := os.ReadFile(installErrorFile()); err == nil && len(text) > 0 {
+			msg += ": " + strings.TrimSpace(string(text))
+		}
+		s.setServiceStatus("missing", msg)
+		return
+	}
+
+	// Служба поставлена в Program Files — дальше работаем из установленной копии.
+	if !samePath(self, winsvc.InstalledExe()) {
+		s.waitService(15 * time.Second)
+		s.relaunch(winsvc.InstalledExe())
+	}
+}
+
+func (s *Service) waitService(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) && s.ctx.Err() == nil {
+		ctx, cancel := context.WithTimeout(s.ctx, time.Second)
+		_, err := s.client.Info(ctx)
+		cancel()
+		if err == nil {
+			return
+		}
+		sleep(s.ctx, 300*time.Millisecond)
+	}
+}
+
+// relaunch запускает другой exe окна и закрывает этот, не трогая VPN.
+func (s *Service) relaunch(exe string) {
+	if exe == "" {
+		exe = winsvc.InstalledExe()
+	}
+	cmd := exec.Command(exe, "--wait-pid", strconv.Itoa(os.Getpid()))
+	if !s.window.IsVisible() {
+		cmd.Args = append(cmd.Args, "--autostart")
+	}
+	if err := cmd.Start(); err != nil {
+		s.setServiceStatus("", "Не удалось перезапустить окно: "+err.Error())
+		return
+	}
+	_ = cmd.Process.Release()
+	s.relaunched.Store(true)
+	s.Quit()
+}
+
+// migrateOldSettings переносит настройки версий 0.1.x, которые хранились
+// в %APPDATA%\vpn-client, если у службы настроек ещё нет.
+func (s *Service) migrateOldSettings() {
+	old, err := app.DefaultPaths()
+	if err != nil {
+		return
+	}
+	marker := filepath.Join(old.Config, "migrated")
+	if _, err := os.Stat(marker); err == nil {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(old.Config, "settings.json"))
+	if err != nil {
+		return
+	}
+	ctx, cancel := s.call()
+	defer cancel()
+	view, err := s.client.Settings(ctx)
+	if err != nil || view.Settings.Link != "" || view.OVPN.Loaded {
+		_ = os.WriteFile(marker, nil, 0o600)
+		return
+	}
+	var settings app.Settings
+	if json.Unmarshal(data, &settings) != nil {
+		return
+	}
+	if err := s.client.SaveSettings(ctx, settings); err != nil {
+		return
+	}
+	if ovpn, err := os.ReadFile(filepath.Join(old.Config, "corp.ovpn")); err == nil {
+		name := "corp.ovpn"
+		if n, err := os.ReadFile(filepath.Join(old.Config, "corp.ovpn.name")); err == nil {
+			name = strings.TrimSpace(string(n))
+		}
+		_, _ = s.client.ImportOVPN(ctx, name, ovpn)
+	}
+	_ = os.WriteFile(marker, nil, 0o600)
+	s.wapp.Event.Emit("settings-changed")
+}
+
+// ---------- трей ----------
 
 func (s *Service) setupTray() {
 	s.menu = s.wapp.NewMenu()
 	s.statusItem = s.menu.Add("Отключено").SetEnabled(false)
 	s.menu.AddSeparator()
-	s.toggleItem = s.menu.Add("Подключить").OnClick(func(*application.Context) { go s.manager.Toggle() })
+	s.toggleItem = s.menu.Add("Подключить").OnClick(func(*application.Context) { go s.Toggle() })
 	s.menu.Add("Открыть окно").OnClick(func(*application.Context) { s.ShowWindow() })
 	s.menu.AddSeparator()
-	s.russiaItem = s.menu.AddCheckbox("Российские сайты напрямую", s.manager.Settings().RussiaDirect).
+	s.russiaItem = s.menu.AddCheckbox("Российские сайты напрямую", true).
 		OnClick(func(ctx *application.Context) {
-			settings := s.manager.Settings()
+			settings := s.settings()
 			settings.RussiaDirect = ctx.ClickedMenuItem().Checked()
 			go func() {
-				if err := s.manager.SaveSettings(settings); err == nil {
+				if err := s.SaveSettings(settings); err == nil {
 					s.wapp.Event.Emit("settings-changed")
 				}
 			}()
 		})
-	s.menu.Add("Журнал").OnClick(func(*application.Context) { _ = app.OpenFile(s.manager.LogFile()) })
+	s.menu.Add("Журнал").OnClick(func(*application.Context) { go s.OpenLog() })
 	s.menu.AddSeparator()
 	s.menu.Add("Выход").OnClick(func(*application.Context) { s.Quit() })
 
 	s.tray = s.wapp.SystemTray.New()
 	s.tray.SetIcon(icon("tray-disconnected"))
-	s.tray.SetTooltip("vpn-client — отключено")
+	s.tray.SetTooltip("vpn-client")
 	s.tray.SetMenu(s.menu)
 	s.tray.OnClick(s.ShowWindow)
-	s.tray.OnDoubleClick(func() { go s.manager.Toggle() })
-	s.refreshTray(s.manager.State())
+	s.tray.OnDoubleClick(func() { go s.Toggle() })
+	s.refreshTray(s.State())
 }
 
 func (s *Service) refreshTray(st app.State) {
@@ -161,16 +523,25 @@ func (s *Service) refreshTray(st app.State) {
 	s.trayMu.Lock()
 	defer s.trayMu.Unlock()
 
-	if st.Status != s.lastStatus {
-		s.tray.SetIcon(icon("tray-" + string(st.Status)))
-		s.lastStatus = st.Status
-	}
+	iconName := "tray-" + string(st.Status)
 	status := map[app.Status]string{
 		app.StatusDisconnected: "Отключено",
 		app.StatusConnecting:   "Подключение…",
 		app.StatusConnected:    "Подключено",
 		app.StatusError:        "Ошибка подключения",
 	}[st.Status]
+	switch st.Service {
+	case "missing":
+		status, iconName = "Служба не установлена", "tray-error"
+	case "installing":
+		status, iconName = "Установка службы…", "tray-connecting"
+	case "unavailable":
+		status, iconName = "Служба недоступна", "tray-disconnected"
+	}
+	if iconName != s.lastIcon {
+		s.tray.SetIcon(icon(iconName))
+		s.lastIcon = iconName
+	}
 
 	var parts []string
 	if st.Status == app.StatusConnected {
@@ -199,7 +570,10 @@ func (s *Service) refreshTray(st app.State) {
 	if st.Status == app.StatusConnecting || st.Status == app.StatusConnected {
 		toggle = "Отключить"
 	}
-	russia := s.manager.Settings().RussiaDirect
+	if st.Service == "missing" {
+		toggle = "Установить службу"
+	}
+	russia := s.settings().RussiaDirect
 	if key := fmt.Sprint(status, toggle, russia); key != s.lastMenu {
 		s.statusItem.SetLabel(status)
 		s.toggleItem.SetLabel(toggle)
@@ -215,4 +589,17 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+func samePath(a, b string) bool {
+	a, _ = filepath.Abs(a)
+	b, _ = filepath.Abs(b)
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+func sleep(ctx context.Context, d time.Duration) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(d):
+	}
 }
