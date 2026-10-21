@@ -17,7 +17,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $env:GOOS = "windows"
 $env:GOARCH = $Arch
 $env:CGO_ENABLED = "0"
-go build -trimpath -tags embed_singbox `
+go build -trimpath -tags embed_singbox,production `
     -ldflags "-s -w -H windowsgui -X main.version=$Version -X github.com/maks-ard/vpn-client/internal/singboxbin.Version=$SingBoxVersion" `
     -o dist\vpnclient.exe .\cmd\vpnclient
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

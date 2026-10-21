@@ -50,7 +50,7 @@ jobs:
         run: |
           exe=vpnclient-${VERSION}-windows-${{ matrix.arch }}.exe
           # -H windowsgui: приложение с окном, без консоли.
-          GOOS=windows GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -tags embed_singbox \
+          GOOS=windows GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -tags embed_singbox,production \
             -ldflags "-s -w -H windowsgui -X main.version=${VERSION} -X github.com/maks-ard/vpn-client/internal/singboxbin.Version=${SING_BOX_VERSION}" \
             -o "${exe}" ./cmd/vpnclient
           sha256sum "${exe}" > "${exe}.sha256"

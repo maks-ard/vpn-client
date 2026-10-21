@@ -138,7 +138,7 @@ Wails импортирует только `cmd/vpnclient`: `internal/app` тес
   (SemVer: пока `v0.x`, API и формат профиля могут меняться).
   В релиз попадает **один exe** на архитектуру (windows-amd64, windows-arm64)
   и его `.sha256`: официальный `sing-box.exe` встраивается через `go:embed`
-  (тег `embed_singbox`), манифест с `requireAdministrator` — через go-winres.
+  (тег `embed_singbox`; плюс тег `production`, без него Wails собирается в отладочном режиме), иконка и манифест — через go-winres.
 - Автообновление: служба раз в 6 часов смотрит `releases/latest`, качает
   `vpnclient-<тег>-windows-<arch>.exe` и `.sha256`, переименовывает текущий exe в
   `.old` и ставит новый, затем перезапускается через `--restart-service`.

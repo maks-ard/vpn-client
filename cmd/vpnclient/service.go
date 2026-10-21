@@ -150,7 +150,8 @@ func (s *Service) SaveSettings(settings app.Settings) error {
 }
 
 func (s *Service) Toggle() error {
-	if s.State().Service == "missing" {
+	// Служба не установлена или зависла — кнопка (пере)устанавливает её.
+	if st := s.State(); st.Service == "missing" || (st.Service == "unavailable" && st.Error != "") {
 		s.InstallService()
 		return nil
 	}
@@ -246,13 +247,26 @@ func (s *Service) shutdown() {
 	s.cancel()
 }
 
+// OpenLog собирает журнал службы и окна в один файл и открывает его.
+// Журнал службы читается напрямую из файла, если служба не отвечает.
 func (s *Service) OpenLog() {
 	ctx, cancel := s.call()
 	defer cancel()
+	var b strings.Builder
 	data, err := s.client.Log(ctx)
 	if err != nil {
-		data = []byte("Служба недоступна: " + err.Error())
+		fmt.Fprintf(&b, "Служба не отвечает: %v\n\n", err)
+		data, err = tailFile(filepath.Join(winsvc.LogDir(), "vpnclient.log"), 512<<10)
+		if err != nil {
+			fmt.Fprintf(&b, "Журнал службы недоступен: %v\n", err)
+		}
 	}
+	b.WriteString("===== Журнал службы =====\n")
+	b.Write(data)
+	gui, _ := tailFile(filepath.Join(guiDir(), "gui.log"), 128<<10)
+	b.WriteString("\n===== Журнал окна =====\n")
+	b.Write(gui)
+	data = []byte(b.String())
 	path := filepath.Join(os.TempDir(), "vpn-client-log.txt")
 	if err := os.WriteFile(path, data, 0o600); err == nil {
 		_ = app.OpenFile(path)
@@ -303,6 +317,7 @@ func (s *Service) setServiceStatus(status, msg string) {
 func (s *Service) supervise() {
 	triedInstall := false
 	firstConnect := true
+	var unavailableSince time.Time
 	for s.ctx.Err() == nil {
 		ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
 		info, err := s.client.Info(ctx)
@@ -322,10 +337,26 @@ func (s *Service) supervise() {
 				s.install()
 				continue
 			}
-			s.setServiceStatus("unavailable", "")
-			sleep(s.ctx, 2*time.Second)
+			if unavailableSince.IsZero() {
+				unavailableSince = time.Now()
+			}
+			msg := ""
+			if time.Since(unavailableSince) > 20*time.Second {
+				msg = "Служба запущена, но не отвечает. Нажмите кнопку, чтобы перезапустить её (понадобятся права администратора)."
+				s.log.Error("служба не отвечает", "err", err)
+			}
+			s.setServiceStatus("unavailable", msg)
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-s.installCh:
+				unavailableSince = time.Time{}
+				s.install()
+			case <-time.After(2 * time.Second):
+			}
 			continue
 		}
+		unavailableSince = time.Time{}
 
 		s.mu.Lock()
 		s.info = info
@@ -613,4 +644,15 @@ func sleep(ctx context.Context, d time.Duration) {
 	case <-ctx.Done():
 	case <-time.After(d):
 	}
+}
+
+func tailFile(path string, max int64) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		data = data[int64(len(data))-max:]
+	}
+	return data, nil
 }

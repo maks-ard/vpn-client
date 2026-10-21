@@ -4,9 +4,11 @@ package winsvc
 
 import (
 	"context"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -26,8 +28,12 @@ const Name = "vpn-client"
 // и администраторов, окно читает всё через API).
 func Paths() app.Paths {
 	root := DataRoot()
-	return app.Paths{Config: filepath.Join(root, "config"), Data: filepath.Join(root, "data")}
+	return app.Paths{Config: filepath.Join(root, "config"), Data: filepath.Join(root, "data"), Logs: LogDir()}
 }
+
+// LogDir — журнал службы. Его, в отличие от остальных данных, могут читать
+// пользователи: окно открывает журнал, даже когда служба не отвечает.
+func LogDir() string { return filepath.Join(DataRoot(), "logs") }
 
 func DataRoot() string {
 	pd := os.Getenv("ProgramData")
@@ -84,33 +90,68 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status 
 	status <- svc.Status{State: svc.StartPending}
 
 	paths := Paths()
-	_ = secureDir(DataRoot())
+	secErr := secureDir(DataRoot())
+	logErr := secureLogDir(LogDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var m *app.Manager
 	srv := ipc.NewServer(h.info, func() { h.tryUpdate(ctx, m) })
 	m, _ = app.NewManager(paths, srv.Broadcast)
 	srv.SetManager(m)
-
-	l, err := ipc.Listen()
-	if err != nil {
-		m.Logf("служба: не удалось открыть канал для окна: %v", err)
-		return false, 1
+	m.Logf("служба запускается, версия %s", h.version)
+	if secErr != nil {
+		m.Logf("служба: права на %s: %v", DataRoot(), secErr)
 	}
-	go func() {
-		if err := ipc.Serve(l, srv.Handler()); err != nil {
-			m.Logf("служба: канал для окна: %v", err)
+	if logErr != nil {
+		m.Logf("служба: права на %s: %v", LogDir(), logErr)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			m.Logf("служба: паника: %v\n%s", r, debug.Stack())
+			panic(r)
 		}
 	}()
 
-	m.Logf("служба запущена, версия %s", h.version)
+	var listenerMu sync.Mutex
+	var listener net.Listener
+	go func() {
+		defer recoverLog(m, "канал для окна")
+		// Канал пересоздаётся, если сервер по какой-то причине остановился:
+		// без него окно не может управлять службой.
+		for ctx.Err() == nil {
+			l, err := ipc.Listen()
+			if err != nil {
+				m.Logf("служба: не удалось открыть канал для окна: %v", err)
+				sleepCtx(ctx, 3*time.Second)
+				continue
+			}
+			listenerMu.Lock()
+			listener = l
+			listenerMu.Unlock()
+			m.Logf("служба: канал для окна открыт")
+			err = ipc.Serve(l, srv.Handler())
+			_ = l.Close()
+			if ctx.Err() != nil {
+				return
+			}
+			m.Logf("служба: канал для окна закрылся (%v), открываю заново", err)
+			sleepCtx(ctx, time.Second)
+		}
+	}()
 
 	if resume := consumeResumeFlag(paths); resume || m.Settings().ConnectOnStart {
-		go connectWithRetry(ctx, m)
+		go func() {
+			defer recoverLog(m, "автоподключение")
+			connectWithRetry(ctx, m)
+		}()
 	}
-	go h.updateLoop(ctx, m)
+	go func() {
+		defer recoverLog(m, "обновление")
+		h.updateLoop(ctx, m)
+	}()
 
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+	m.Logf("служба запущена")
 	for req := range requests {
 		switch req.Cmd {
 		case svc.Interrogate:
@@ -119,7 +160,11 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status 
 			status <- svc.Status{State: svc.StopPending}
 			cancel()
 			m.Disconnect()
-			_ = l.Close()
+			listenerMu.Lock()
+			if listener != nil {
+				_ = listener.Close()
+			}
+			listenerMu.Unlock()
 			m.Logf("служба остановлена")
 			return false, 0
 		}
@@ -127,6 +172,22 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status 
 	cancel()
 	m.Disconnect()
 	return false, 0
+}
+
+// recoverLog пишет панику горутины в журнал перед падением службы
+// (Windows перезапустит её по настройкам восстановления).
+func recoverLog(m *app.Manager, what string) {
+	if r := recover(); r != nil {
+		m.Logf("служба: паника (%s): %v\n%s", what, r, debug.Stack())
+		panic(r)
+	}
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(d):
+	}
 }
 
 // connectWithRetry: при загрузке системы сеть появляется не сразу, поэтому

@@ -60,6 +60,7 @@ function renderMain() {
   const configured = state.proxy.enabled || state.corp.enabled;
   const power = $("power");
   power.setAttribute("aria-label", state.service === "missing" ? "Установить службу"
+    : state.service === "unavailable" && state.error ? "Перезапустить службу"
     : st === "disconnected" || st === "error" ? "Подключить" : "Отключить");
 
   const titles = { disconnected: "Отключено", connecting: "Подключение…", connected: "Подключено", error: "Ошибка" };
@@ -77,8 +78,8 @@ function renderMain() {
     title = "Установка…";
     sub = "Подтвердите запрос Windows на права администратора. Не видно запроса — нажмите на мигающий значок на панели задач.";
   } else if (state.service === "unavailable") {
-    title = "Подождите…";
-    sub = "Подключаемся к службе VPN";
+    title = state.error ? "Служба не отвечает" : "Подождите…";
+    sub = state.error || "Подключаемся к службе VPN";
   }
   app.classList.toggle("connecting", st === "connecting" || state.service === "installing" || state.service === "unavailable");
   $("status-title").textContent = title;

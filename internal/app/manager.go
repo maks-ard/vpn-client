@@ -98,6 +98,7 @@ func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
 	if err != nil {
 		log.Printf("%v", err)
 	}
+	log.redact(s.Link)
 	m := &Manager{paths: paths, onChange: onChange, log: log, settings: s, singBoxPath: os.Getenv("VPNCLIENT_SINGBOX")}
 	m.state = m.idleState()
 	return m, nil
@@ -129,6 +130,7 @@ func (m *Manager) SaveSettings(s Settings) error {
 		return err
 	}
 	m.settings = s
+	m.log.redact(s.Link)
 	active := m.cancel != nil
 	if !active {
 		m.state = m.idleState()

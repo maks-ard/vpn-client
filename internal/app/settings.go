@@ -51,10 +51,12 @@ func defaultSettings() Settings {
 
 // Paths — где приложение хранит файлы.
 type Paths struct {
-	// Config — настройки и .ovpn (%APPDATA%\vpn-client).
+	// Config — настройки и .ovpn.
 	Config string
-	// Data — sing-box, кэш, журнал (%LOCALAPPDATA%\vpn-client).
+	// Data — sing-box, кэш подписки.
 	Data string
+	// Logs — каталог журнала; пусто — Data.
+	Logs string
 }
 
 func DefaultPaths() (Paths, error) {
@@ -72,7 +74,12 @@ func DefaultPaths() (Paths, error) {
 func (p Paths) settingsFile() string { return filepath.Join(p.Config, "settings.json") }
 func (p Paths) ovpnFile() string     { return filepath.Join(p.Config, "corp.ovpn") }
 func (p Paths) ovpnNameFile() string { return filepath.Join(p.Config, "corp.ovpn.name") }
-func (p Paths) LogFile() string      { return filepath.Join(p.Data, "vpnclient.log") }
+func (p Paths) LogFile() string {
+	if p.Logs != "" {
+		return filepath.Join(p.Logs, "vpnclient.log")
+	}
+	return filepath.Join(p.Data, "vpnclient.log")
+}
 
 func loadSettings(p Paths) (Settings, error) {
 	s := defaultSettings()

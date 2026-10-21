@@ -90,6 +90,9 @@ func Install() error {
 	if err := secureDir(DataRoot()); err != nil {
 		return fmt.Errorf("права на %s: %w", DataRoot(), err)
 	}
+	if err := secureLogDir(LogDir()); err != nil {
+		return fmt.Errorf("права на %s: %w", LogDir(), err)
+	}
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("запуск службы: %w", err)
 	}
@@ -152,7 +155,7 @@ func stopAndWait(s *mgr.Service) error {
 			return fmt.Errorf("остановка службы: %w", err)
 		}
 	}
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(300 * time.Millisecond)
 		st, err = s.Query()
@@ -163,7 +166,21 @@ func stopAndWait(s *mgr.Service) error {
 			return nil
 		}
 	}
-	return errors.New("служба не остановилась за 30 секунд")
+	// Служба зависла и не реагирует на остановку — завершаем процесс.
+	if st.ProcessId != 0 {
+		if h, err := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, st.ProcessId); err == nil {
+			_ = windows.TerminateProcess(h, 1)
+			_, _ = windows.WaitForSingleObject(h, 10000)
+			_ = windows.CloseHandle(h)
+		}
+		for i := 0; i < 20; i++ {
+			time.Sleep(300 * time.Millisecond)
+			if st, err = s.Query(); err == nil && st.State == svc.Stopped {
+				return nil
+			}
+		}
+	}
+	return errors.New("служба не остановилась за 20 секунд")
 }
 
 func samePath(a, b string) bool {
@@ -202,6 +219,24 @@ func secureDir(path string) error {
 		return err
 	}
 	sd, err := windows.SecurityDescriptorFromString("D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+// secureLogDir: журнал службы читают все пользователи, пишут — система и
+// администраторы. Ссылка на подписку в журнале заменяется на ***.
+func secureLogDir(path string) error {
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	sd, err := windows.SecurityDescriptorFromString("D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FR;;;BU)")
 	if err != nil {
 		return err
 	}

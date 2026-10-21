@@ -17,11 +17,12 @@ const maxLogSize = 2 << 20
 type logFile struct {
 	path string
 
-	mu   sync.Mutex
-	f    *os.File
-	size int64
-	tail []string
-	part string
+	mu      sync.Mutex
+	f       *os.File
+	size    int64
+	tail    []string
+	part    string
+	secrets []string
 }
 
 func newLogFile(path string) *logFile {
@@ -33,20 +34,38 @@ func (l *logFile) Printf(format string, a ...any) {
 	_, _ = l.Write([]byte(line))
 }
 
+// redact задаёт строки, которые не должны попадать в журнал (ссылка на
+// подписку — это личный токен): журнал службы могут читать пользователи.
+func (l *logFile) redact(secrets ...string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.secrets = l.secrets[:0]
+	for _, s := range secrets {
+		if len(s) >= 8 {
+			l.secrets = append(l.secrets, s)
+		}
+	}
+}
+
 // Write принимает вывод sing-box.
 func (l *logFile) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	n := len(p)
+	if len(l.secrets) > 0 {
+		text := string(p)
+		for _, s := range l.secrets {
+			text = strings.ReplaceAll(text, s, "***")
+		}
+		p = []byte(text)
+	}
 	l.remember(string(p))
 	if err := l.open(); err != nil {
-		return len(p), nil
+		return n, nil
 	}
-	n, err := l.f.Write(p)
-	l.size += int64(n)
-	if err != nil {
-		return len(p), nil
-	}
-	return len(p), nil
+	written, _ := l.f.Write(p)
+	l.size += int64(written)
+	return n, nil
 }
 
 func (l *logFile) open() error {

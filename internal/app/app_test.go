@@ -163,3 +163,23 @@ func statusStrings(s []Status) []string {
 	}
 	return out
 }
+
+func TestLogRedactsSubscription(t *testing.T) {
+	p := testPaths(t)
+	m, err := NewManager(p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := "https://sub.example.com/secret-token-123"
+	if err := m.SaveSettings(Settings{Link: link}); err != nil {
+		t.Fatal(err)
+	}
+	m.Logf("ошибка подписки: Get %q: timeout", link)
+	data, err := m.Log(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "secret-token") || !strings.Contains(string(data), "***") {
+		t.Errorf("ссылка попала в журнал: %s", data)
+	}
+}
