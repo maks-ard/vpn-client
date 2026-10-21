@@ -125,7 +125,9 @@ Wails импортирует только `cmd/vpnclient`: `internal/app` тес
 
 ## Релизы
 
-- Релиз собирает `.github/workflows/release.yml` при пуше тега `vX.Y.Z`
+- Релиз собирает `.github/workflows/release.yml` при пуше тега `vX.Y.Z` или при
+  ручном запуске (workflow_dispatch с полем `version`: тег создаётся самим релизом —
+  так делай из облачных сессий, где пуш тегов запрещён)
   (SemVer: пока `v0.x`, API и формат профиля могут меняться).
   В релиз попадает **один exe** на архитектуру (windows-amd64, windows-arm64)
   и его `.sha256`: официальный `sing-box.exe` встраивается через `go:embed`

@@ -1,16 +1,23 @@
 name: Release
 
-# Релиз создаётся пушем тега вида v1.2.3:
-#   git tag v0.1.0 && git push origin v0.1.0
+# Релиз создаётся пушем тега вида v1.2.3 (git tag v0.1.0 && git push origin v0.1.0)
+# или вручную: Actions → Release → Run workflow с версией — тогда тег на текущем
+# коммите создаётся вместе с релизом.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия, например v0.1.0"
+        required: true
 
 permissions:
   contents: write
 
 env:
   SING_BOX_VERSION: "1.14.3"
+  VERSION: ${{ inputs.version || github.ref_name }}
 
 jobs:
   build:
@@ -23,6 +30,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: check version
+        run: '[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "неверная версия: $VERSION"; exit 1; }'
       - name: test
         run: go test ./...
       - name: download sing-box
@@ -36,13 +45,13 @@ jobs:
         run: |
           go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json \
             --arch ${{ matrix.arch }} --out cmd/vpnclient/rsrc \
-            --product-version "${GITHUB_REF_NAME}" --file-version "${GITHUB_REF_NAME}"
+            --product-version "${VERSION}" --file-version "${VERSION}"
       - name: build
         run: |
-          exe=vpnclient-${GITHUB_REF_NAME}-windows-${{ matrix.arch }}.exe
+          exe=vpnclient-${VERSION}-windows-${{ matrix.arch }}.exe
           # -H windowsgui: приложение с окном, без консоли.
           GOOS=windows GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath -tags embed_singbox \
-            -ldflags "-s -w -H windowsgui -X main.version=${GITHUB_REF_NAME} -X github.com/maks-ard/vpn-client/internal/singboxbin.Version=${SING_BOX_VERSION}" \
+            -ldflags "-s -w -H windowsgui -X main.version=${VERSION} -X github.com/maks-ard/vpn-client/internal/singboxbin.Version=${SING_BOX_VERSION}" \
             -o "${exe}" ./cmd/vpnclient
           sha256sum "${exe}" > "${exe}.sha256"
       - uses: actions/upload-artifact@v4
@@ -65,15 +74,16 @@ jobs:
           cat > notes.md <<EOF
           ## Скачать
 
-          \`vpnclient-${GITHUB_REF_NAME}-windows-amd64.exe\` — для обычных компьютеров, \`arm64\` — для ноутбуков на ARM.
+          \`vpnclient-${VERSION}-windows-amd64.exe\` — для обычных компьютеров, \`arm64\` — для ноутбуков на ARM.
           Это один файл, установка не нужна: sing-box ${SING_BOX_VERSION} встроен внутрь.
           Windows при запуске запросит права администратора — они нужны для перехвата трафика.
           Дальше: «Настройки» → вставьте ссылку на подписку и выберите файл .ovpn → кнопка подключения на главной.
 
           sing-box распространяется по лицензии GPLv3: https://github.com/SagerNet/sing-box
           EOF
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "$VERSION" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
             --notes-file notes.md \
             --generate-notes
