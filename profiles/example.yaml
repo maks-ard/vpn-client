@@ -1,15 +1,23 @@
 # Пример профиля vpnclient. Скопируйте в profile.yaml рядом с vpnclient.exe
 # и впишите свои данные. profile.yaml и *.ovpn в git не попадают.
 
-# Ссылка на VLESS-сервер: через него идёт зарубежный трафик.
+# Зарубежные серверы: ссылка на подписку (https://…) из панели VPN-провайдера.
+# Список серверов скачивается при подключении и кэшируется в data/.
+subscription:
+  url: "https://example.com/sub/TOKEN"
+  server: ""               # пусто — самый быстрый автоматически
+  user_agent: ""           # по умолчанию v2rayN/7.0
+
+# Либо одна ссылка vless:// вместо подписки.
 # Поддерживаются security=reality/tls/none и транспорты tcp, ws, grpc, http, httpupgrade.
-vless: "vless://UUID@server.example.com:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=PUBLIC_KEY&sid=SHORT_ID&type=tcp#my-server"
+# vless: "vless://UUID@server.example.com:443?security=reality&pbk=KEY&sni=www.microsoft.com#my-server"
 
 # Корпоративный OpenVPN. Подключается встроенным в sing-box клиентом,
 # отдельный OpenVPN ставить не нужно.
 openvpn:
   config: corp.ovpn        # путь относительно этого файла
-  # Если в .ovpn есть auth-user-pass без файла с паролем:
+  # Только если в .ovpn есть auth-user-pass без файла с паролем;
+  # при входе по сертификату оставьте пустыми.
   username: ""
   password: ""
 

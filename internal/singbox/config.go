@@ -2,6 +2,7 @@
 package singbox
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/maks-ard/vpn-client/internal/ovpn"
 	"github.com/maks-ard/vpn-client/internal/profile"
+	"github.com/maks-ard/vpn-client/internal/subscription"
 	"github.com/maks-ard/vpn-client/internal/vless"
 )
 
@@ -19,6 +21,7 @@ const (
 	TagTUN       = "tun-in"
 	TagDirect    = "direct"
 	TagProxy     = "proxy"
+	TagAuto      = "auto"
 	TagCorp      = "corp"
 	TagDNSDirect = "dns-direct"
 	TagDNSRemote = "dns-remote"
@@ -44,26 +47,46 @@ var ruleSetURLs = map[string]string{
 
 type M = map[string]any
 
-// Input — всё, из чего собирается конфиг. VLESS и OpenVPN могут быть nil.
+// Input — всё, из чего собирается конфиг. Servers и OpenVPN могут быть пустыми.
 type Input struct {
 	Profile *profile.Profile
-	VLESS   *vless.Link
-	OpenVPN *ovpn.Config
+	// Servers — VLESS-серверы: одна ссылка из профиля или список из подписки.
+	Servers []*vless.Link
+	// Subscription — подписка, если серверы взяты из неё.
+	Subscription *subscription.Subscription
+	OpenVPN      *ovpn.Config
 }
 
-// Load читает профиль и связанные с ним файлы.
-func Load(path string) (*Input, error) {
+// Load читает профиль и связанные с ним файлы, а подписку скачивает
+// (или берёт из кэша в dataDir).
+func Load(ctx context.Context, path, dataDir string) (*Input, error) {
 	p, err := profile.Load(path)
 	if err != nil {
 		return nil, err
 	}
+	return FromProfile(ctx, p, dataDir)
+}
+
+// FromProfile — то же, что Load, для уже прочитанного профиля.
+func FromProfile(ctx context.Context, p *profile.Profile, dataDir string) (*Input, error) {
 	in := &Input{Profile: p}
-	if p.VLESS != "" {
-		if in.VLESS, err = vless.Parse(p.VLESS); err != nil {
+	switch {
+	case p.VLESS != "":
+		link, err := vless.Parse(p.VLESS)
+		if err != nil {
 			return nil, fmt.Errorf("vless: %w", err)
 		}
+		in.Servers = []*vless.Link{link}
+	case p.Subscription != nil:
+		sub, err := subscription.Get(ctx, p.Subscription.URL, p.Subscription.UserAgent, dataDir)
+		if err != nil {
+			return nil, err
+		}
+		in.Subscription = sub
+		in.Servers = sub.Servers
 	}
 	if p.OpenVPN != nil {
+		var err error
 		if in.OpenVPN, err = loadOVPN(p); err != nil {
 			return nil, err
 		}
@@ -81,10 +104,19 @@ func loadOVPN(p *profile.Profile) (*ovpn.Config, error) {
 
 // Warnings — некритичные замечания, которые стоит показать пользователю.
 func (in *Input) Warnings() []string {
-	if in.OpenVPN == nil {
-		return nil
-	}
 	var w []string
+	if sub := in.Subscription; sub != nil {
+		if sub.FromCache {
+			w = append(w, fmt.Sprintf("подписка: не удалось обновить (%v), используется список от %s",
+				sub.FetchError, sub.FetchedAt.Format("02.01.2006 15:04")))
+		}
+		for _, s := range sub.Skipped {
+			w = append(w, "подписка: пропущен сервер: "+s)
+		}
+	}
+	if in.OpenVPN == nil {
+		return w
+	}
 	for _, s := range in.OpenVPN.Warnings {
 		w = append(w, "openvpn: "+s)
 	}
@@ -105,19 +137,19 @@ func Build(in *Input) ([]byte, error) {
 
 func build(in *Input) (M, error) {
 	p := in.Profile
-	hasProxy := in.VLESS != nil
+	hasProxy := len(in.Servers) > 0
 	hasCorp := in.OpenVPN != nil
 	if !hasProxy && len(p.Routing.ProxyDomains) > 0 {
-		return nil, fmt.Errorf("routing.proxy_domains задан, но нет ссылки vless")
+		return nil, fmt.Errorf("routing.proxy_domains задан, но нет ни ссылки vless, ни подписки")
 	}
 
 	outbounds := []any{M{"type": "direct", "tag": TagDirect}}
 	if hasProxy {
-		ob, err := vlessOutbound(in.VLESS)
+		obs, err := proxyOutbounds(in)
 		if err != nil {
 			return nil, err
 		}
-		outbounds = append(outbounds, ob)
+		outbounds = append(outbounds, obs...)
 	}
 	var endpoints []any
 	if hasCorp {
@@ -223,7 +255,7 @@ func routeSection(in *Input, hasProxy, hasCorp bool, final string) M {
 // useRuleSets: правила для России нужны, только когда есть куда отправлять
 // остальной трафик.
 func useRuleSets(in *Input) bool {
-	return in.VLESS != nil && in.Profile.RussiaDirect()
+	return len(in.Servers) > 0 && in.Profile.RussiaDirect()
 }
 
 func ruleSets() []any {

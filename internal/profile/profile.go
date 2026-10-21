@@ -16,6 +16,8 @@ import (
 type Profile struct {
 	// VLESS — ссылка vless://… для зарубежного трафика.
 	VLESS string `yaml:"vless"`
+	// Subscription — подписка со списком серверов (вместо одной ссылки vless).
+	Subscription *Subscription `yaml:"subscription"`
 
 	OpenVPN   *OpenVPN  `yaml:"openvpn"`
 	Corporate Corporate `yaml:"corporate"`
@@ -26,6 +28,15 @@ type Profile struct {
 
 	// dir — каталог файла профиля, от него считаются относительные пути.
 	dir string
+}
+
+type Subscription struct {
+	// URL — https-ссылка подписки из панели (Remnawave, Marzban, 3x-ui…).
+	URL string `yaml:"url"`
+	// UserAgent — с каким User-Agent запрашивать; по умолчанию как v2rayN.
+	UserAgent string `yaml:"user_agent"`
+	// Server — имя выбранного сервера; пусто — самый быстрый автоматически.
+	Server string `yaml:"server"`
 }
 
 type OpenVPN struct {
@@ -141,8 +152,17 @@ func (p *Profile) applyDefaults() {
 }
 
 func (p *Profile) validate() error {
-	if p.VLESS == "" && p.OpenVPN == nil {
-		return fmt.Errorf("нужен хотя бы один из разделов: vless или openvpn")
+	if p.Subscription != nil && p.Subscription.URL == "" {
+		p.Subscription = nil
+	}
+	if p.VLESS == "" && p.Subscription == nil && p.OpenVPN == nil {
+		return fmt.Errorf("нужен хотя бы один из разделов: subscription, vless или openvpn")
+	}
+	if p.VLESS != "" && p.Subscription != nil {
+		return fmt.Errorf("укажите что-то одно: subscription или vless")
+	}
+	if p.Subscription != nil && !strings.HasPrefix(p.Subscription.URL, "https://") && !strings.HasPrefix(p.Subscription.URL, "http://") {
+		return fmt.Errorf("subscription.url: ожидается ссылка https://")
 	}
 	if p.OpenVPN != nil && p.OpenVPN.Config == "" {
 		return fmt.Errorf("openvpn.config: укажите путь к .ovpn")

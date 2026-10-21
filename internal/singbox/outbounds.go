@@ -11,10 +11,67 @@ import (
 	"github.com/maks-ard/vpn-client/internal/vless"
 )
 
-func vlessOutbound(l *vless.Link) (M, error) {
+// URL для замера задержки до серверов.
+const urlTestURL = "https://www.gstatic.com/generate_204"
+
+// proxyOutbounds: один сервер — это сразу outbound proxy; несколько —
+// selector proxy с вариантом auto (urltest выбирает самый быстрый) и
+// каждым сервером отдельно, чтобы его можно было выбрать вручную.
+func proxyOutbounds(in *Input) ([]any, error) {
+	if len(in.Servers) == 1 {
+		ob, err := vlessOutbound(in.Servers[0], TagProxy)
+		if err != nil {
+			return nil, err
+		}
+		return []any{ob}, nil
+	}
+	reserved := map[string]bool{TagDirect: true, TagProxy: true, TagAuto: true, TagCorp: true}
+	var out []any
+	var tags []string
+	for _, l := range in.Servers {
+		tag := l.Name
+		for reserved[tag] {
+			tag += " "
+		}
+		reserved[tag] = true
+		ob, err := vlessOutbound(l, tag)
+		if err != nil {
+			return nil, fmt.Errorf("сервер %q: %w", l.Name, err)
+		}
+		out = append(out, ob)
+		tags = append(tags, tag)
+	}
+	selected := TagAuto
+	if sub := in.Profile.Subscription; sub != nil && sub.Server != "" {
+		for _, t := range tags {
+			if t == sub.Server {
+				selected = t
+			}
+		}
+	}
+	out = append(out,
+		M{
+			"type":      "urltest",
+			"tag":       TagAuto,
+			"outbounds": tags,
+			"url":       urlTestURL,
+			"interval":  "5m",
+			"tolerance": 50,
+		},
+		M{
+			"type":      "selector",
+			"tag":       TagProxy,
+			"outbounds": append([]string{TagAuto}, tags...),
+			"default":   selected,
+		},
+	)
+	return out, nil
+}
+
+func vlessOutbound(l *vless.Link, tag string) (M, error) {
 	ob := M{
 		"type":            "vless",
-		"tag":             TagProxy,
+		"tag":             tag,
 		"server":          l.Server,
 		"server_port":     l.Port,
 		"uuid":            l.UUID,

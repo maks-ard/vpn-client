@@ -82,7 +82,11 @@ func parseFlags(name string, args []string, extra func(*flag.FlagSet)) (*common,
 
 // load читает профиль, собирает конфиг и печатает предупреждения.
 func (c *common) load() (*singbox.Input, []byte, error) {
-	in, err := singbox.Load(c.profile)
+	dataDir, err := c.dataDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	in, err := singbox.Load(context.Background(), c.profile, dataDir)
 	if err != nil {
 		return nil, nil, err
 	}

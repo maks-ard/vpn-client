@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -8,11 +9,12 @@ import (
 	"testing"
 
 	"github.com/maks-ard/vpn-client/internal/profile"
+	"github.com/maks-ard/vpn-client/internal/subscription"
 )
 
 func loadTestConfig(t *testing.T) M {
 	t.Helper()
-	in, err := Load("testdata/profile.yaml")
+	in, err := Load(context.Background(), "testdata/profile.yaml", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +191,7 @@ func TestSingBoxCheck(t *testing.T) {
 	if exe == "" {
 		t.Skip("VPNCLIENT_SINGBOX не задан")
 	}
-	in, err := Load("testdata/profile.yaml")
+	in, err := Load(context.Background(), "testdata/profile.yaml", t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,9 +199,70 @@ func TestSingBoxCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	singBoxCheck(t, exe, data)
+
+	// Подписка с несколькими серверами: selector + urltest.
+	sub, err := subscription.Parse([]byte("vless://id1@a.example.com:443?security=reality&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&sni=a.com#A\nvless://id2@b.example.com:443?security=tls&type=grpc&serviceName=g#B"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Servers, in.Subscription = sub.Servers, sub
+	if data, err = Build(in); err != nil {
+		t.Fatal(err)
+	}
+	singBoxCheck(t, exe, data)
+}
+
+func singBoxCheck(t *testing.T, exe string, config []byte) {
+	t.Helper()
 	cmd := exec.Command(exe, "check", "-c", "stdin", "-D", t.TempDir())
-	cmd.Stdin = strings.NewReader(string(data))
+	cmd.Stdin = strings.NewReader(string(config))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("sing-box check: %v\n%s", err, out)
 	}
+}
+
+func TestBuildSubscription(t *testing.T) {
+	sub, err := subscription.Parse([]byte(strings.Join([]string{
+		"vless://id1@nl.example.com:443?security=reality&pbk=K&sni=a.com#NL",
+		"vless://id2@de.example.com:443?security=tls&type=ws&path=/ws#DE",
+		"vless://id3@de2.example.com:443?security=tls#DE",
+		"vless://id4@x.example.com:443?security=tls#auto",
+	}, "\n")), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := profile.Parse([]byte("subscription:\n  url: https://example.com/sub\n  server: DE\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := Build(&Input{Profile: p, Servers: sub.Servers, Subscription: sub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg M
+	_ = json.Unmarshal(data, &cfg)
+	byTag := map[string]M{}
+	for _, o := range cfg["outbounds"].([]any) {
+		byTag[o.(M)["tag"].(string)] = o.(M)
+	}
+	for _, tag := range []string{"NL", "DE", "DE (2)", "auto ", TagAuto, TagProxy} {
+		if byTag[tag] == nil {
+			t.Errorf("нет outbound %q, есть: %v", tag, keys(byTag))
+		}
+	}
+	if sel := byTag[TagProxy]; sel["type"] != "selector" || sel["default"] != "DE" {
+		t.Errorf("selector = %v", sel)
+	}
+	if auto := byTag[TagAuto]; auto["type"] != "urltest" || len(auto["outbounds"].([]any)) != 4 {
+		t.Errorf("urltest = %v", auto)
+	}
+}
+
+func keys(m map[string]M) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
