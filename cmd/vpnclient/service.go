@@ -28,9 +28,11 @@ type Service struct {
 	toggleItem *application.MenuItem
 	russiaItem *application.MenuItem
 
-	trayMu     sync.Mutex
-	lastStatus app.Status
-	quitting   atomic.Bool
+	trayMu      sync.Mutex
+	lastStatus  app.Status
+	lastTooltip string
+	lastMenu    string
+	quitting    atomic.Bool
 }
 
 func (s *Service) init(wapp *application.App, window application.Window, m *app.Manager, version string) {
@@ -186,16 +188,25 @@ func (s *Service) refreshTray(st app.State) {
 	if st.Status == app.StatusError && st.Error != "" {
 		tooltip += "\n" + truncate(st.Error, 100)
 	}
-	s.tray.SetTooltip(truncate(tooltip, 127))
-
-	s.statusItem.SetLabel(status)
-	if st.Status == app.StatusConnecting || st.Status == app.StatusConnected {
-		s.toggleItem.SetLabel("Отключить")
-	} else {
-		s.toggleItem.SetLabel("Подключить")
+	// Состояние приходит раз в секунду (скорость), а трей и меню трогаем
+	// только при реальных изменениях.
+	if tooltip = truncate(tooltip, 127); tooltip != s.lastTooltip {
+		s.tray.SetTooltip(tooltip)
+		s.lastTooltip = tooltip
 	}
-	s.russiaItem.SetChecked(s.manager.Settings().RussiaDirect)
-	s.menu.Update()
+
+	toggle := "Подключить"
+	if st.Status == app.StatusConnecting || st.Status == app.StatusConnected {
+		toggle = "Отключить"
+	}
+	russia := s.manager.Settings().RussiaDirect
+	if key := fmt.Sprint(status, toggle, russia); key != s.lastMenu {
+		s.statusItem.SetLabel(status)
+		s.toggleItem.SetLabel(toggle)
+		s.russiaItem.SetChecked(russia)
+		s.menu.Update()
+		s.lastMenu = key
+	}
 }
 
 func truncate(s string, n int) string {

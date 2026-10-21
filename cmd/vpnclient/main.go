@@ -96,9 +96,12 @@ func main() {
 
 	svc.setupTray()
 
-	if manager.Settings().ConnectOnStart {
-		manager.Connect()
-	}
+	// Подключаемся, когда приложение и трей уже готовы.
+	wapp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		if manager.Settings().ConnectOnStart {
+			manager.Connect()
+		}
+	})
 
 	if err := wapp.Run(); err != nil {
 		log.Fatal(err)
