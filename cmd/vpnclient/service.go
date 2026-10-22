@@ -316,6 +316,7 @@ func (s *Service) setServiceStatus(status, msg string) {
 // перезапускалась.
 func (s *Service) supervise() {
 	triedInstall := false
+	relaunchFailed := false
 	firstConnect := true
 	var unavailableSince time.Time
 	for s.ctx.Err() == nil {
@@ -379,10 +380,14 @@ func (s *Service) supervise() {
 			triedInstall = true
 			s.install()
 			continue
-		case update.Newer(info.Version, s.version):
+		case update.Newer(info.Version, s.version) && !relaunchFailed:
 			// Служба обновилась сама — перезапускаем окно из новой версии.
-			s.relaunch(info.Exe)
-			return
+			if s.relaunch(info.Exe) {
+				return
+			}
+			// Не вышло — продолжаем работать со службой из этого окна,
+			// новая версия окна откроется при следующем запуске.
+			relaunchFailed = true
 		}
 
 		if firstConnect {
@@ -460,7 +465,10 @@ func (s *Service) install() {
 	// Служба поставлена в Program Files — дальше работаем из установленной копии.
 	if !samePath(self, winsvc.InstalledExe()) {
 		s.waitService(15 * time.Second)
-		s.relaunch(winsvc.InstalledExe())
+		if !s.relaunch(winsvc.InstalledExe()) {
+			s.setServiceStatus("", "Служба установлена, но окно из C:\\Program Files\\vpn-client не запустилось — "+
+				"вероятно, его блокирует антивирус. Откройте vpn-client из меню «Пуск».")
+		}
 	}
 }
 
@@ -478,22 +486,33 @@ func (s *Service) waitService(timeout time.Duration) {
 }
 
 // relaunch запускает другой exe окна и закрывает этот, не трогая VPN.
-func (s *Service) relaunch(exe string) {
+// Свежезаписанный exe антивирус может какое-то время не давать запустить
+// («Access is denied»), поэтому пробуем около минуты. Возвращает false,
+// если запустить так и не удалось — тогда окно продолжает работать как есть.
+func (s *Service) relaunch(exe string) bool {
 	if exe == "" {
 		exe = winsvc.InstalledExe()
 	}
 	s.log.Info("перезапуск окна", "exe", exe)
-	cmd := exec.Command(exe, "--wait-pid", strconv.Itoa(os.Getpid()))
-	if !s.window.IsVisible() {
-		cmd.Args = append(cmd.Args, "--autostart")
+	var err error
+	for attempt := 0; attempt < 20 && s.ctx.Err() == nil; attempt++ {
+		if attempt > 0 {
+			sleep(s.ctx, 3*time.Second)
+		}
+		cmd := exec.Command(exe, "--wait-pid", strconv.Itoa(os.Getpid()))
+		if !s.window.IsVisible() {
+			cmd.Args = append(cmd.Args, "--autostart")
+		}
+		if err = cmd.Start(); err == nil {
+			_ = cmd.Process.Release()
+			s.relaunched.Store(true)
+			s.Quit()
+			return true
+		}
+		s.log.Warn("перезапуск окна не удался", "attempt", attempt+1, "err", err)
 	}
-	if err := cmd.Start(); err != nil {
-		s.setServiceStatus("", "Не удалось перезапустить окно: "+err.Error())
-		return
-	}
-	_ = cmd.Process.Release()
-	s.relaunched.Store(true)
-	s.Quit()
+	s.log.Error("окно не перезапущено", "err", err)
+	return false
 }
 
 // migrateOldSettings переносит настройки версий 0.1.x, которые хранились

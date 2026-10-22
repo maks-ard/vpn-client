@@ -138,7 +138,8 @@ func RestartService() error {
 	if err := stopAndWait(s); err != nil {
 		return err
 	}
-	return s.Start()
+	// После обновления exe свежий — антивирус может ненадолго запрещать запуск.
+	return startWithRetry(s)
 }
 
 // startWithRetry запускает службу. Сразу после записи нового exe антивирус
