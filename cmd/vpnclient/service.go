@@ -124,7 +124,8 @@ func (s *Service) versionLine() string {
 	if info.SingBox != "" {
 		v += " · sing-box " + info.SingBox
 	}
-	if info.Update != "" {
+	// Пока идёт загрузка или обновление готово, об этом говорит плашка ниже.
+	if info.Update != "" && info.UpdateState == "" {
 		v += " · " + info.Update
 	}
 	return v

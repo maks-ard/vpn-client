@@ -650,7 +650,13 @@ $("btn-install-update").addEventListener("click", async () => {
   }
 });
 
-Events.On("update", (ev) => { update = ev.data; renderUpdate(); });
+Events.On("update", (ev) => {
+  const changed = ev.data.state !== update.state;
+  update = ev.data;
+  renderUpdate();
+  // Строка версии прячет статус загрузки, пока видна плашка.
+  if (changed) reloadSettings().catch(() => {});
+});
 Events.On("state", (ev) => { state = ev.data; renderMain(); renderUpdate(); });
 Events.On("show-page", (ev) => showPage(ev.data));
 Events.On("settings-changed", () => reloadSettings().catch(showError));

@@ -134,7 +134,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 }
 .notice:hover { background: rgba(245, 184, 75, 0.22); }
 .update-bar {
-  display: flex; flex-direction: column; gap: 8px; margin-top: -8px;
+  display: flex; flex-direction: column; gap: 8px;
   padding: 10px 12px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border);
 }
 .update-row { display: flex; align-items: center; gap: 12px; }

@@ -55,19 +55,6 @@
       </span>
     </button>
 
-    <section class="update-bar" id="update-bar" role="status" hidden>
-      <div class="update-row">
-        <div class="update-text">
-          <div class="update-title" id="update-title"></div>
-          <div class="update-sub" id="update-sub"></div>
-        </div>
-        <button class="btn update-btn" id="btn-install-update" hidden>Установить сейчас</button>
-      </div>
-      <div class="progress" id="update-progress" role="progressbar" aria-label="Загрузка обновления" aria-valuemin="0" aria-valuemax="100">
-        <div class="progress-fill" id="update-progress-fill"></div>
-      </div>
-    </section>
-
     <section class="routes">
       <div class="section-label">Маршруты</div>
 
@@ -214,6 +201,18 @@
       <div class="row pad version-row">
         <div class="hint" id="version"></div>
         <button class="link-btn" id="btn-update">Проверить обновления</button>
+      </div>
+      <div class="update-bar" id="update-bar" role="status" hidden>
+        <div class="update-row">
+          <div class="update-text">
+            <div class="update-title" id="update-title"></div>
+            <div class="update-sub" id="update-sub"></div>
+          </div>
+          <button class="btn update-btn" id="btn-install-update" hidden>Установить сейчас</button>
+        </div>
+        <div class="progress" id="update-progress" role="progressbar" aria-label="Загрузка обновления" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress-fill" id="update-progress-fill"></div>
+        </div>
       </div>
     </section>
     <section class="stack-sm" id="settings-actions" hidden>
