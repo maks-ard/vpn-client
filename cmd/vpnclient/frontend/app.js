@@ -299,7 +299,9 @@ function renderSettings() {
 function renderLinkInfo() {
   const info = $("link-info");
   const expiry = $("subscription-expiry");
+  const mainExpiry = $("subscription-expiry-main");
   expiry.hidden = true;
+  mainExpiry.hidden = true;
   if (state && settings && /^https?:\/\//i.test(settings.link || "")) {
     const result = subscriptionExpiry(state.proxy.expire);
     expiry.hidden = false;
@@ -307,6 +309,10 @@ function renderLinkInfo() {
     expiry.className = "subscription-expiry" + (result.expired ? " expired" : result.soon ? " soon" : "");
     expiry.title = result.detail || "Срок передаётся провайдером в заголовке Subscription-Userinfo при загрузке подписки.";
     if (!validDate(state.proxy.updated) && !validDate(state.proxy.expire)) expiry.textContent = "Срок подписки появится после её загрузки";
+    mainExpiry.hidden = false;
+    mainExpiry.textContent = expiry.textContent;
+    mainExpiry.className = expiry.className;
+    mainExpiry.title = expiry.title;
   }
   if (!state || !settings || !settings.link) { info.hidden = true; return; }
   const px = state.proxy;
