@@ -86,6 +86,8 @@ type Manager struct {
 
 	mu          sync.Mutex
 	maintenance sync.Mutex
+	settingsMu  sync.Mutex
+	nextConnect time.Time
 	settings    Settings
 	state       State
 	cancel      context.CancelFunc
@@ -118,6 +120,10 @@ func (m *Manager) OVPN() OVPNInfo { return ovpnInfo(m.paths) }
 // SaveSettings сохраняет настройки. Если VPN подключён и поменялось то,
 // что влияет на маршруты, он переподключается.
 func (m *Manager) SaveSettings(s Settings) error {
+	// Быстрые добавления доменов не должны запускать пересекающиеся
+	// циклы остановки и повторного входа на корпоративный сервер.
+	m.settingsMu.Lock()
+	defer m.settingsMu.Unlock()
 	if err := s.normalize(); err != nil {
 		return err
 	}
@@ -277,6 +283,7 @@ func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}
 
 	m.mu.Lock()
 	m.cancel = nil
+	m.nextConnect = time.Now().Add(5 * time.Second)
 	m.api = nil
 	m.state = m.idleState()
 	if err != nil && ctx.Err() == nil {
@@ -292,6 +299,16 @@ func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}
 }
 
 func (m *Manager) session(ctx context.Context, settings Settings) error {
+	m.mu.Lock()
+	wait := time.Until(m.nextConnect)
+	m.mu.Unlock()
+	if wait > 0 {
+		m.Logf("пауза перед повторным подключением: ожидание закрытия предыдущей сессии")
+		sleep(ctx, wait)
+		if ctx.Err() != nil {
+			return nil
+		}
+	}
 	m.log.Printf("подключение")
 	m.update(func(s *State) {
 		s.Corp.Up = false

@@ -7,7 +7,26 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestReconnectPauseCancellation(t *testing.T) {
+	m, _ := NewManager(testPaths(t), nil)
+	t.Cleanup(func() { _ = m.log.Close() })
+	m.nextConnect = time.Now().Add(time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() { done <- m.session(ctx, Settings{}) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("отмена зависла на паузе переподключения")
+	}
+}
 
 func TestServiceProbes(t *testing.T) {
 	m, _ := NewManager(testPaths(t), nil)

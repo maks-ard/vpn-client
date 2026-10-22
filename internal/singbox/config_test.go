@@ -200,6 +200,18 @@ func TestSingBoxCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	singBoxCheck(t, exe, data)
+	// Второй корпоративный суффикс должен сохраняться и в маршрутах, и в DNS.
+	in.Profile.Corporate.Domains = []string{"corp.example", "office.local"}
+	data, err = Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, domain := range in.Profile.Corporate.Domains {
+		if strings.Count(string(data), domain) < 2 {
+			t.Fatalf("домен %s не добавлен в маршруты и DNS", domain)
+		}
+	}
+	singBoxCheck(t, exe, data)
 
 	// Подписка с несколькими серверами: selector + urltest.
 	sub, err := subscription.Parse([]byte("vless://id1@a.example.com:443?security=reality&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&sni=a.com#A\nvless://id2@b.example.com:443?security=tls&type=grpc&serviceName=g#B"), nil)
