@@ -16,6 +16,7 @@ let draft = null;
 let savedSettings = null;
 let previousSettings = null;
 let updateRefresh = 0;
+let update = { state: "", version: "", progress: 0 };
 
 function friendlyServer(name) {
   if (!name || name === "auto") return "авто";
@@ -606,13 +607,59 @@ tooltip.addEventListener("mouseleave", hideHelp);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideHelp(); });
 $("page-settings").addEventListener("scroll", hideHelp);
 
-Events.On("state", (ev) => { state = ev.data; renderMain(); });
+// ---------- обновление ----------
+
+function renderUpdate() {
+  const bar = $("update-bar");
+  bar.hidden = !update.state;
+  if (!update.state) return;
+  const name = update.version ? "Обновление " + update.version : "Обновление";
+  const btn = $("btn-install-update");
+  const progress = $("update-progress");
+  const vpnOn = state && (state.status === "connected" || state.status === "connecting");
+  if (update.state === "downloading") {
+    const known = update.progress >= 0;
+    $("update-title").textContent = "Загружается " + name.toLowerCase();
+    $("update-sub").textContent = known ? update.progress + "%" : "Загрузка…";
+    progress.hidden = false;
+    progress.classList.toggle("indeterminate", !known);
+    $("update-progress-fill").style.width = known ? update.progress + "%" : "";
+    if (known) progress.setAttribute("aria-valuenow", update.progress); else progress.removeAttribute("aria-valuenow");
+    btn.hidden = true;
+  } else {
+    const installing = update.state === "installing";
+    $("update-title").textContent = installing ? "Устанавливается " + name.toLowerCase() + "…" : name + " готово";
+    $("update-sub").textContent = installing ? "Приложение перезапустится"
+      : vpnOn ? "VPN ненадолго отключится и подключится снова" : "Установка займёт несколько секунд";
+    progress.hidden = true;
+    btn.hidden = false;
+    btn.disabled = installing;
+  }
+}
+
+$("btn-install-update").addEventListener("click", async () => {
+  const btn = $("btn-install-update");
+  btn.disabled = true;
+  try {
+    await svc("InstallUpdate");
+    update = { ...update, state: "installing" };
+    renderUpdate();
+  } catch (e) {
+    btn.disabled = false;
+    showError(e);
+  }
+});
+
+Events.On("update", (ev) => { update = ev.data; renderUpdate(); });
+Events.On("state", (ev) => { state = ev.data; renderMain(); renderUpdate(); });
 Events.On("show-page", (ev) => showPage(ev.data));
 Events.On("settings-changed", () => reloadSettings().catch(showError));
 
 (async () => {
   try {
     state = await svc("State");
+    update = await svc("Update");
+    renderUpdate();
     await reloadSettings();
     if (!(settings.link || "").trim() && !(ovpn && ovpn.loaded)) {
       showPage("settings");

@@ -28,6 +28,12 @@ type Info struct {
 	Exe string `json:"exe"`
 	// Update — что сейчас с обновлением (для подсказки в окне).
 	Update string `json:"update,omitempty"`
+	// UpdateState — "downloading", "ready" (можно установить сейчас) или
+	// "installing"; пусто, если загруженного обновления нет.
+	UpdateState   string `json:"updateState,omitempty"`
+	UpdateVersion string `json:"updateVersion,omitempty"`
+	// UpdateProgress — процент загрузки; -1, если размер файла неизвестен.
+	UpdateProgress int `json:"updateProgress"`
 }
 
 type SettingsView struct {
@@ -54,13 +60,15 @@ type Server struct {
 	info func() Info
 	// checkUpdate запускает проверку обновлений вне расписания.
 	checkUpdate func()
+	// installUpdate отключает VPN и сразу ставит загруженное обновление.
+	installUpdate func() error
 
 	mu   sync.Mutex
 	subs map[chan app.State]struct{}
 }
 
-func NewServer(info func() Info, checkUpdate func()) *Server {
-	return &Server{info: info, checkUpdate: checkUpdate, subs: map[chan app.State]struct{}{}}
+func NewServer(info func() Info, checkUpdate func(), installUpdate func() error) *Server {
+	return &Server{info: info, checkUpdate: checkUpdate, installUpdate: installUpdate, subs: map[chan app.State]struct{}{}}
 }
 
 // SetManager подключает менеджер; до этого сервер умеет только Info.
@@ -156,6 +164,13 @@ func (s *Server) Handler() http.Handler {
 			go s.checkUpdate()
 		}
 		reply(w, nil, nil)
+	})
+	mux.HandleFunc("POST /v1/update/install", func(w http.ResponseWriter, r *http.Request) {
+		if s.installUpdate == nil {
+			reply(w, nil, errors.New("установка обновлений недоступна"))
+			return
+		}
+		reply(w, nil, s.installUpdate())
 	})
 	return s.requireManager(mux)
 }
@@ -350,6 +365,10 @@ func (c *Client) TestServers(ctx context.Context) error {
 
 func (c *Client) CheckUpdate(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "/v1/update", nil, nil)
+}
+
+func (c *Client) InstallUpdate(ctx context.Context) error {
+	return c.do(ctx, http.MethodPost, "/v1/update/install", nil, nil)
 }
 
 func (c *Client) Log(ctx context.Context) ([]byte, error) {

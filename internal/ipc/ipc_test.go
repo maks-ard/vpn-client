@@ -16,7 +16,7 @@ import (
 func startServer(t *testing.T) (*Client, *app.Manager) {
 	t.Helper()
 	dir := t.TempDir()
-	srv := NewServer(func() Info { return Info{Version: "v1.2.3"} }, nil)
+	srv := NewServer(func() Info { return Info{Version: "v1.2.3"} }, nil, nil)
 	m, err := app.NewManager(app.Paths{Config: filepath.Join(dir, "c"), Data: filepath.Join(dir, "d")}, srv.Broadcast)
 	if err != nil {
 		t.Fatal(err)
@@ -99,5 +99,13 @@ func TestClientUnavailable(t *testing.T) {
 	})
 	if _, err := c.Info(context.Background()); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("ожидалась ErrUnavailable, получено %v", err)
+	}
+}
+
+func TestInstallUpdateError(t *testing.T) {
+	c, _ := startServer(t)
+	// Без установщика ошибка доходит до окна, а не теряется.
+	if err := c.InstallUpdate(context.Background()); err == nil || !strings.Contains(err.Error(), "недоступна") {
+		t.Fatalf("ожидалась ошибка установки, получено %v", err)
 	}
 }

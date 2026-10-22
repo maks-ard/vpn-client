@@ -173,6 +173,7 @@ func runGUI(autostart bool) {
 
 	wapp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		go gui.supervise()
+		go gui.watchUpdate()
 	})
 
 	if err := wapp.Run(); err != nil {

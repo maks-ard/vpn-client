@@ -65,9 +65,14 @@ func TestLatestAndDownload(t *testing.T) {
 		t.Fatalf("latest: %+v %v", rel, err)
 	}
 	dir := t.TempDir()
+	var done, total int64
+	c.Progress = func(d, n int64) { done, total = d, n }
 	path, err := c.Download(context.Background(), rel, dir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if done != int64(len(exe)) || total != int64(len(exe)) {
+		t.Errorf("прогресс загрузки: %d из %d, ожидалось %d", done, total, len(exe))
 	}
 	if got, _ := os.ReadFile(path); string(got) != string(exe) {
 		t.Errorf("содержимое: %q", got)

@@ -4,6 +4,7 @@ package winsvc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -73,6 +74,10 @@ type handler struct {
 	pending  *pendingUpdate
 	status   string
 	statusMu sync.Mutex
+	// Состояние загрузки для индикатора и кнопки «Установить сейчас» в окне.
+	updateState    string
+	updateVersion  string
+	updateProgress int
 }
 
 type pendingUpdate struct {
@@ -85,7 +90,16 @@ func (h *handler) info() ipc.Info {
 	exe, _ := os.Executable()
 	h.statusMu.Lock()
 	defer h.statusMu.Unlock()
-	return ipc.Info{Version: h.version, SingBox: singboxbin.Version, Exe: exe, Update: h.status}
+	return ipc.Info{
+		Version: h.version, SingBox: singboxbin.Version, Exe: exe, Update: h.status,
+		UpdateState: h.updateState, UpdateVersion: h.updateVersion, UpdateProgress: h.updateProgress,
+	}
+}
+
+func (h *handler) setUpdate(state, version string, progress int) {
+	h.statusMu.Lock()
+	h.updateState, h.updateVersion, h.updateProgress = state, version, progress
+	h.statusMu.Unlock()
 }
 
 func (h *handler) setStatus(s string) {
@@ -103,7 +117,7 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var m *app.Manager
-	srv := ipc.NewServer(h.info, func() { h.tryUpdate(ctx, m) })
+	srv := ipc.NewServer(h.info, func() { h.tryUpdate(ctx, m) }, func() error { return h.installNow(m) })
 	m, _ = app.NewManager(paths, srv.Broadcast)
 	go func() {
 		defer recoverLog(m, "метаданные подписки")
@@ -317,16 +331,27 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 	}
 	m.Logf("обновление: загружаю %s", rel.Version)
 	h.setStatus("Загружается " + rel.Version)
+	h.setUpdate("downloading", rel.Version, 0)
+	c.Progress = func(done, total int64) {
+		percent := -1
+		if total > 0 {
+			percent = int(min(done*100/total, 100))
+		}
+		h.setUpdate("downloading", rel.Version, percent)
+	}
 	path, err := c.Download(ctx, rel, filepath.Join(Paths().Data, "update"))
 	if err != nil {
 		h.setStatus("Ошибка загрузки обновления; подробности в журнале")
+		h.setUpdate("", "", 0)
 		m.Logf("обновление: %v", err)
 		return
 	}
 	if ctx.Err() != nil {
+		h.setUpdate("", "", 0)
 		return
 	}
 	h.pending = &pendingUpdate{release: rel, path: path}
+	h.setUpdate("ready", rel.Version, 100)
 	h.applyPending(m)
 }
 
@@ -360,8 +385,48 @@ func (h *handler) applyPending(m *app.Manager) {
 	h.pending = nil
 	if err != nil {
 		h.setStatus("Не удалось установить обновление; повторите проверку. Подробности в журнале")
+		h.setUpdate("", "", 0)
 		m.Logf("обновление: %v", err)
 	}
+}
+
+// installNow — кнопка «Установить сейчас»: не ждём, пока пользователь сам
+// отключит VPN. После перезапуска служба подключится снова по флагу resume.
+func (h *handler) installNow(m *app.Manager) error {
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
+	pending := h.pending
+	if pending == nil {
+		return errors.New("обновление ещё не загружено")
+	}
+	resume := m.Active()
+	if resume {
+		if err := os.WriteFile(resumeFile(Paths()), nil, 0o600); err != nil {
+			return fmt.Errorf("обновление: %w", err)
+		}
+		m.Logf("обновление: установка по кнопке, VPN переподключится после перезапуска")
+		m.DisconnectWithReason("установка обновления")
+	}
+	attempted, err := m.InstallWhileIdle(func() error {
+		return h.installUpdate(m, pending.release, pending.path)
+	})
+	if !attempted || err != nil {
+		if resume {
+			_ = os.Remove(resumeFile(Paths()))
+		}
+	}
+	if !attempted {
+		return errors.New("VPN подключается заново; повторите установку после подключения")
+	}
+	h.pending = nil
+	if err != nil {
+		h.setUpdate("", "", 0)
+		if resume {
+			m.Connect()
+		}
+		return err
+	}
+	return nil
 }
 
 func (h *handler) installUpdate(m *app.Manager, rel *update.Release, path string) error {
@@ -377,6 +442,7 @@ func (h *handler) installUpdate(m *app.Manager, rel *update.Release, path string
 		return err
 	}
 	h.setStatus("Перезапуск после обновления до " + rel.Version)
+	h.setUpdate("installing", rel.Version, 100)
 	m.Logf("обновление: установлена %s, перезапуск службы", rel.Version)
 	if err := startDetached(exe, "--restart-service"); err != nil {
 		h.setStatus("Обновление записано, но перезапуск службы не запущен")

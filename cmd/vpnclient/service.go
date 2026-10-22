@@ -179,6 +179,59 @@ func (s *Service) CheckUpdate() error {
 	return s.client.CheckUpdate(ctx)
 }
 
+// UpdateView — загрузка обновления для индикатора и кнопки «Установить сейчас».
+type UpdateView struct {
+	State    string `json:"state"`
+	Version  string `json:"version"`
+	Progress int    `json:"progress"`
+}
+
+func updateView(info ipc.Info) UpdateView {
+	return UpdateView{State: info.UpdateState, Version: info.UpdateVersion, Progress: info.UpdateProgress}
+}
+
+func (s *Service) Update() UpdateView {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return updateView(s.info)
+}
+
+// InstallUpdate отключает VPN, ставит загруженное обновление и перезапускает
+// службу; окно перезапустится из новой версии само (см. supervise).
+func (s *Service) InstallUpdate() error {
+	ctx, cancel := s.call()
+	defer cancel()
+	return s.client.InstallUpdate(ctx)
+}
+
+// watchUpdate опрашивает службу: загрузка идёт в фоне по расписанию,
+// а событий о ней служба не рассылает.
+func (s *Service) watchUpdate() {
+	var last UpdateView
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
+		info, err := s.client.Info(ctx)
+		cancel()
+		if err != nil {
+			continue
+		}
+		s.mu.Lock()
+		s.info = info
+		s.mu.Unlock()
+		if view := updateView(info); view != last {
+			last = view
+			s.wapp.Event.Emit("update", view)
+		}
+	}
+}
+
 // ChooseOVPN открывает диалог выбора файла. Возвращает nil, если
 // пользователь передумал.
 func (s *Service) ChooseOVPN() (*app.OVPNInfo, error) {

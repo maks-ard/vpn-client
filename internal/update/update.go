@@ -34,6 +34,8 @@ type Checker struct {
 	Repo string
 	Arch string
 	HTTP *http.Client
+	// Progress получает число загруженных байт exe и его размер (0 — неизвестен).
+	Progress func(done, total int64)
 }
 
 func NewChecker() *Checker {
@@ -136,7 +138,11 @@ func (c *Checker) Download(ctx context.Context, rel *Release, dir string) (strin
 		return "", fmt.Errorf("загрузка: сервер ответил %s", resp.Status)
 	}
 	h := sha256.New()
-	_, err = io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, 512<<20))
+	var w io.Writer = io.MultiWriter(f, h)
+	if c.Progress != nil {
+		w = io.MultiWriter(w, &progressWriter{total: max(resp.ContentLength, 0), fn: c.Progress})
+	}
+	_, err = io.Copy(w, io.LimitReader(resp.Body, 512<<20))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -150,6 +156,17 @@ func (c *Checker) Download(ctx context.Context, rel *Release, dir string) (strin
 		return "", err
 	}
 	return path, nil
+}
+
+type progressWriter struct {
+	done, total int64
+	fn          func(done, total int64)
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	p.done += int64(len(b))
+	p.fn(p.done, p.total)
+	return len(b), nil
 }
 
 func (c *Checker) get(ctx context.Context, url string, max int64) ([]byte, error) {
