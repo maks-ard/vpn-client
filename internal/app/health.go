@@ -1,9 +1,39 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/maks-ard/vpn-client/internal/singbox"
 )
+
+var serviceProbes = []struct{ name, url string }{
+	{"YouTube", singbox.URLTestURL},
+	{"Instagram", "https://www.instagram.com/"},
+	{"ChatGPT", "https://chatgpt.com/"},
+	{"Claude", "https://claude.ai/"},
+}
+
+// Каждый сервис проверяется отдельно: успех YouTube не означает доступность остальных.
+func (m *Manager) checkServices(ctx context.Context, api *clash) {
+	var workers sync.WaitGroup
+	for _, probe := range serviceProbes {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			defer cancel()
+			_, err := api.delayURL(probeCtx, singbox.TagProxy, probe.url)
+			if ctx.Err() != nil {
+				return
+			}
+			m.healthWarning(probe.name+":", err != nil, probe.name+": проверка доступа через прокси не прошла")
+		}()
+	}
+	workers.Wait()
+}
 
 const corpAuthFailed = "сервер OpenVPN отклонил авторизацию; проверьте учётные данные и параллельные подключения"
 

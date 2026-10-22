@@ -101,10 +101,14 @@ func (c *clash) selectProxy(ctx context.Context, selector, name string) error {
 
 // delay замеряет задержку через outbound и сохраняет её в истории sing-box.
 func (c *clash) delay(ctx context.Context, name string) (int, error) {
+	return c.delayURL(ctx, name, singbox.URLTestURL)
+}
+
+func (c *clash) delayURL(ctx context.Context, name, target string) (int, error) {
 	var out struct {
 		Delay int `json:"delay"`
 	}
-	q := url.Values{"url": {singbox.URLTestURL}, "timeout": {"5000"}}
+	q := url.Values{"url": {target}, "timeout": {"5000"}}
 	err := c.do(ctx, http.MethodGet, "/proxies/"+url.PathEscape(name)+"/delay?"+q.Encode(), nil, &out)
 	return out.Delay, err
 }

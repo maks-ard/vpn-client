@@ -232,7 +232,7 @@ func (s *Service) CloseWindow() {
 		s.window.Hide()
 		return
 	}
-	s.Quit()
+	s.wapp.Quit()
 }
 
 func (s *Service) ShowWindow() {
@@ -241,11 +241,20 @@ func (s *Service) ShowWindow() {
 	s.window.Focus()
 }
 
-// Quit — «Выход» в трее: закрываем окно, не останавливая VPN в службе.
+// Quit — явный «Выход» в трее отключает VPN перед завершением окна.
 func (s *Service) Quit() {
-	s.log.Info("выход из окна; VPN продолжает работать в службе")
-	s.quitting.Store(true)
-	s.wapp.Quit()
+	go func() {
+		s.log.Info("выход из трея: отключение VPN")
+		ctx, cancel := s.call()
+		defer cancel()
+		if err := s.client.Disconnect(ctx); err != nil {
+			s.log.Error("не удалось отключить VPN при выходе", "err", err)
+			s.ShowWindow()
+			return
+		}
+		s.quitting.Store(true)
+		s.wapp.Quit()
+	}()
 }
 
 func (s *Service) shutdown() {

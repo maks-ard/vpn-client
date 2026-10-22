@@ -2,9 +2,39 @@ package app
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
+
+func TestServiceProbes(t *testing.T) {
+	m, _ := NewManager(testPaths(t), nil)
+	t.Cleanup(func() { _ = m.log.Close() })
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target := r.URL.Query().Get("url")
+		mu.Lock()
+		seen[target] = true
+		mu.Unlock()
+		if strings.Contains(target, "claude.ai") {
+			http.Error(w, `{"message":"недоступен"}`, http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"delay":100}`))
+	}))
+	defer srv.Close()
+	m.checkServices(context.Background(), &clash{base: srv.URL, http: srv.Client()})
+	if len(seen) != 4 {
+		t.Fatalf("проверено %d сервисов вместо 4", len(seen))
+	}
+	warnings := m.State().Warnings
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0], "Claude:") {
+		t.Fatalf("неверное предупреждение: %v", warnings)
+	}
+}
 
 func TestWhileIdle(t *testing.T) {
 	m, _ := NewManager(testPaths(t), nil)

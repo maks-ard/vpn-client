@@ -426,13 +426,10 @@ func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
 					_ = api.groupDelay(reqCtx, singbox.TagAuto)
 				}
 				cancel()
-				probeCtx, probeCancel := context.WithTimeout(ctx, 8*time.Second)
-				_, err := api.delay(probeCtx, singbox.TagProxy)
-				probeCancel()
+				m.checkServices(ctx, api)
 				if ctx.Err() != nil {
 					return
 				}
-				m.healthWarning("Прокси:", err != nil, "Прокси: проверка доступа не прошла; VPN запущен, но зарубежные сайты могут быть недоступны")
 				dnsCtx, dnsCancel := context.WithTimeout(ctx, 8*time.Second)
 				dnsErr := api.dnsQuery(dnsCtx, "www.youtube.com")
 				dnsCancel()
