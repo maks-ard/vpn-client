@@ -343,6 +343,10 @@ func (s *Service) supervise() {
 			msg := ""
 			if time.Since(unavailableSince) > 20*time.Second {
 				msg = "Служба запущена, но не отвечает. Нажмите кнопку, чтобы перезапустить её (понадобятся права администратора)."
+				if _, statErr := os.Stat(winsvc.InstalledExe()); statErr != nil {
+					// Служба зарегистрирована, а её exe нет — его удалил антивирус.
+					msg = winsvc.AntivirusHint
+				}
 				s.log.Error("служба не отвечает", "err", err)
 			}
 			s.setServiceStatus("unavailable", msg)

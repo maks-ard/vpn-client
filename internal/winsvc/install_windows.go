@@ -95,6 +95,9 @@ func Install() error {
 		return fmt.Errorf("права на %s: %w", LogDir(), err)
 	}
 	if err := s.Start(); err != nil {
+		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+			return errors.New(AntivirusHint)
+		}
 		return fmt.Errorf("запуск службы: %w", err)
 	}
 
@@ -295,6 +298,12 @@ func createShortcut(target string) error {
 	_, err = oleutil.CallMethod(link, "Save")
 	return err
 }
+
+// AntivirusHint — что сказать, если файл программы исчез сразу после
+// установки: так бывает, когда антивирус удаляет его по ложному срабатыванию.
+const AntivirusHint = "Файл программы в C:\\Program Files\\vpn-client пропал — вероятно, его удалил антивирус. " +
+	"Восстановите его из карантина и добавьте в исключения антивируса папки " +
+	"C:\\Program Files\\vpn-client и C:\\ProgramData\\vpn-client, затем нажмите кнопку ещё раз."
 
 // ErrCancelled — пользователь отказался в окне UAC.
 var ErrCancelled = errors.New("установка отменена в запросе прав администратора")
