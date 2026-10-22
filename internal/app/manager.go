@@ -87,6 +87,7 @@ type Manager struct {
 
 	mu          sync.Mutex
 	maintenance sync.Mutex
+	updating    bool
 	settingsMu  sync.Mutex
 	nextConnect time.Time
 	settings    Settings
@@ -228,6 +229,9 @@ func (m *Manager) Toggle() {
 func (m *Manager) Connect() {
 	m.maintenance.Lock()
 	defer m.maintenance.Unlock()
+	if m.updating {
+		return
+	}
 	m.mu.Lock()
 	if m.cancel != nil {
 		m.mu.Unlock()
@@ -256,6 +260,21 @@ func (m *Manager) WhileIdle(fn func()) bool {
 	}
 	fn()
 	return true
+}
+
+// InstallWhileIdle резервирует простой до завершения перезапуска службы.
+// После успешного запуска обновления новое подключение не должно обогнать SCM.
+func (m *Manager) InstallWhileIdle(fn func() error) (bool, error) {
+	m.maintenance.Lock()
+	defer m.maintenance.Unlock()
+	if m.Active() || m.updating {
+		return false, nil
+	}
+	if err := fn(); err != nil {
+		return true, err
+	}
+	m.updating = true
+	return true, nil
 }
 
 // Disconnect останавливает sing-box и ждёт, пока он уберёт маршруты.
@@ -606,6 +625,12 @@ func (m *Manager) TestServers() {
 }
 
 func (m *Manager) LogFile() string { return m.paths.LogFile() }
+
+// Close освобождает процесс VPN и журнал при завершении владельца менеджера.
+func (m *Manager) Close() error {
+	m.DisconnectWithReason("завершение менеджера")
+	return m.log.Close()
+}
 
 // Log возвращает конец журнала (не больше max байт).
 func (m *Manager) Log(max int64) ([]byte, error) {

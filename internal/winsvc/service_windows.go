@@ -4,6 +4,7 @@ package winsvc
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -69,8 +70,15 @@ type handler struct {
 	version string
 
 	updateMu sync.Mutex
+	pending  *pendingUpdate
 	status   string
 	statusMu sync.Mutex
+}
+
+type pendingUpdate struct {
+	release   *update.Release
+	path      string
+	idleSince time.Time
 }
 
 func (h *handler) info() ipc.Info {
@@ -235,6 +243,24 @@ func consumeResumeFlag(p app.Paths) bool {
 }
 
 func (h *handler) updateLoop(ctx context.Context, m *app.Manager) {
+	// Проверка готового обновления не зависит от шестичасового опроса GitHub.
+	go func() {
+		defer recoverLog(m, "ожидание установки обновления")
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.updateMu.Lock()
+				if ctx.Err() == nil {
+					h.applyPending(m)
+				}
+				h.updateMu.Unlock()
+			}
+		}
+	}()
 	select {
 	case <-ctx.Done():
 		return
@@ -257,6 +283,10 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 	}
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
+	if h.pending != nil {
+		h.applyPending(m)
+		return
+	}
 	h.setStatus("Проверка обновлений…")
 	c := update.NewChecker()
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -271,11 +301,6 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 		h.setStatus("обновлений нет, проверено в " + time.Now().Format("15:04"))
 		return
 	}
-	// Версию проверяем и при активном VPN, но установку откладываем.
-	if m.Active() {
-		h.setStatus("Доступна " + rel.Version + "; обновление отложено до отключения VPN")
-		return
-	}
 	m.Logf("обновление: загружаю %s", rel.Version)
 	h.setStatus("Загружается " + rel.Version)
 	path, err := c.Download(ctx, rel, filepath.Join(Paths().Data, "update"))
@@ -284,29 +309,67 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 		m.Logf("обновление: %v", err)
 		return
 	}
-	if !m.WhileIdle(func() { h.installUpdate(m, rel, path) }) {
-		h.setStatus("Обновление загружено; установка отложена до отключения VPN")
+	if ctx.Err() != nil {
+		return
+	}
+	h.pending = &pendingUpdate{release: rel, path: path}
+	h.applyPending(m)
+}
+
+// Вызывается под updateMu; после ошибки автоматические повторы прекращаются.
+func (h *handler) applyPending(m *app.Manager) {
+	if h.pending == nil {
+		return
+	}
+	pending := h.pending
+	if m.Active() {
+		pending.idleSince = time.Time{}
+		h.setStatus("Обновление " + pending.release.Version + " готово. Установится после отключения VPN")
+		return
+	}
+	// Не принимаем короткий промежуток между отключением и подключением
+	// при сохранении маршрутов за намеренное завершение VPN пользователем.
+	if pending.idleSince.IsZero() {
+		pending.idleSince = time.Now()
+		return
+	}
+	if time.Since(pending.idleSince) < 5*time.Second {
+		return
+	}
+	attempted, err := m.InstallWhileIdle(func() error {
+		return h.installUpdate(m, pending.release, pending.path)
+	})
+	if !attempted {
+		h.setStatus("Обновление " + pending.release.Version + " готово. Установится после отключения VPN")
+		return
+	}
+	h.pending = nil
+	if err != nil {
+		h.setStatus("Не удалось установить обновление; повторите проверку. Подробности в журнале")
+		m.Logf("обновление: %v", err)
 	}
 }
 
-func (h *handler) installUpdate(m *app.Manager, rel *update.Release, path string) {
+func (h *handler) installUpdate(m *app.Manager, rel *update.Release, path string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		h.setStatus("Ошибка определения установленного exe")
 		m.Logf("обновление: %v", err)
-		return
+		return err
 	}
 	if err := update.Replace(exe, path); err != nil {
 		h.setStatus("Не удалось установить обновление; подробности в журнале")
 		m.Logf("обновление: %v", err)
-		return
+		return err
 	}
 	h.setStatus("Перезапуск после обновления до " + rel.Version)
 	m.Logf("обновление: установлена %s, перезапуск службы", rel.Version)
 	if err := startDetached(exe, "--restart-service"); err != nil {
 		h.setStatus("Обновление записано, но перезапуск службы не запущен")
 		m.Logf("обновление: перезапуск службы: %v", err)
+		return fmt.Errorf("перезапуск службы: %w", err)
 	}
+	return nil
 }
 
 // startDetached запускает процесс, который переживёт остановку службы.
