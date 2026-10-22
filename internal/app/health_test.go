@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -91,7 +93,7 @@ func TestSessionOutputAuthFailure(t *testing.T) {
 	}
 	m.update(func(s *State) { s.Corp.Up = true })
 	t.Cleanup(func() { _ = m.log.Close() })
-	o := &sessionOutput{m: m}
+	o := newSessionOutput(m)
 	for _, part := range []string{"ERROR endpoint/openvpn-client[corp]: authentication ", "failed: terminal\n"} {
 		if n, err := o.Write([]byte(part)); err != nil || n != len(part) {
 			t.Fatalf("Write: %d %v", n, err)
@@ -116,5 +118,97 @@ func TestHealthWarningRecovery(t *testing.T) {
 	m.healthWarning("Прокси:", false, "")
 	if got := strings.Join(m.State().Warnings, ","); got != "предупреждение профиля" {
 		t.Fatalf("после восстановления: %s", got)
+	}
+}
+
+func TestSessionOutputCorpTerminated(t *testing.T) {
+	m, _ := NewManager(testPaths(t), nil)
+	t.Cleanup(func() { _ = m.log.Close() })
+	o := newSessionOutput(m)
+	_, _ = o.Write([]byte("ERROR endpoint/openvpn-client[corp]: session failed; retrying\n"))
+	if down, _ := o.corpTerminated(); down {
+		t.Fatal("повторяемая ошибка принята за завершение OpenVPN")
+	}
+	_, _ = o.Write([]byte("ERROR endpoint/openvpn-client[corp]: client terminated: authentication failed: terminal (auth-retry none)\n"))
+	if down, auth := o.corpTerminated(); !down || !auth {
+		t.Fatalf("завершение не распознано: down=%v auth=%v", down, auth)
+	}
+}
+
+func TestCorpRetryLimit(t *testing.T) {
+	m, _ := NewManager(testPaths(t), nil)
+	t.Cleanup(func() { _ = m.log.Close() })
+	for i := 0; i < maxCorpRetries; i++ {
+		if !m.allowCorpRetry() {
+			t.Fatalf("попытка %d запрещена", i+1)
+		}
+	}
+	if m.allowCorpRetry() {
+		t.Fatal("повторы не ограничены")
+	}
+}
+
+// fakeClash отвечает как Clash API sing-box: сервер "bad" ничего не открывает,
+// "slow" открывает всё медленно, "partial" — всё, кроме Claude.
+func fakeClash(t *testing.T, now string) (*clash, *string) {
+	selected := now
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/proxies":
+			_, _ = w.Write([]byte(`{"proxies":{"proxy":{"type":"Selector","now":"` + selected + `","all":["auto","bad","slow","partial"]}}}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/proxies/proxy":
+			var body struct{ Name string }
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			selected = body.Name
+			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/delay"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/proxies/"), "/delay")
+			target := r.URL.Query().Get("url")
+			if name == "bad" || name == "proxy" && selected == "bad" || name == "partial" && strings.Contains(target, "claude.ai") {
+				http.Error(w, `{"message":"timeout"}`, http.StatusServiceUnavailable)
+				return
+			}
+			delay := 100
+			if name == "slow" {
+				delay = 900
+			}
+			_, _ = w.Write([]byte(`{"delay":` + strconv.Itoa(delay) + `}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return &clash{base: srv.URL, http: srv.Client()}, &selected
+}
+
+func TestBestServerPrefersMoreServices(t *testing.T) {
+	api, _ := fakeClash(t, "bad")
+	if got := bestServer(context.Background(), api, []string{"bad", "partial", "slow"}); got != "slow" {
+		t.Fatalf("выбран %q вместо сервера, открывающего все сервисы", got)
+	}
+	if got := bestServer(context.Background(), api, []string{"bad"}); got != "" {
+		t.Fatalf("выбран неработающий сервер %q", got)
+	}
+}
+
+func TestFailoverKeepsAutoSelection(t *testing.T) {
+	m, _ := NewManager(testPaths(t), nil)
+	t.Cleanup(func() { _ = m.log.Close() })
+	api, selected := fakeClash(t, "bad")
+	if !m.failover(context.Background(), api) || *selected != "slow" {
+		t.Fatalf("переключение не выполнено: %q", *selected)
+	}
+	m.refreshProxies(context.Background(), api)
+	if p := m.State().Proxy; p.Selected != "auto" || p.Current != "slow" {
+		t.Fatalf("выбор пользователя «авто» потерян: selected=%q current=%q", p.Selected, p.Current)
+	}
+
+	m.settings.Server = "bad"
+	*selected = "bad"
+	if m.failover(context.Background(), api) || *selected != "bad" {
+		t.Fatal("ручной выбор сервера заменён автоматически")
 	}
 }

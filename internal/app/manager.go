@@ -92,11 +92,13 @@ type Manager struct {
 	settingsMu     sync.Mutex
 	subscriptionMu sync.Mutex
 	nextConnect    time.Time
-	settings       Settings
-	state          State
-	cancel         context.CancelFunc
-	done           chan struct{}
-	api            *clash
+	// corpRetries — перезапуски подряд после завершения OpenVPN, пока он ни разу не поднялся.
+	corpRetries int
+	settings    Settings
+	state       State
+	cancel      context.CancelFunc
+	done        chan struct{}
+	api         *clash
 }
 
 func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
@@ -257,6 +259,7 @@ func (m *Manager) Connect() {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.done = make(chan struct{})
+	m.corpRetries = 0
 	settings := m.settings
 	metadata := m.state.Proxy
 	m.state = m.idleState()
@@ -319,12 +322,16 @@ func (m *Manager) DisconnectWithReason(reason string) {
 func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}) {
 	defer close(done)
 	err := m.session(ctx, settings)
-	// Ограниченные повторы только после аварийного завершения процесса.
-	// Ошибки профиля и авторизации нельзя лечить бесконечными переподключениями.
-	for attempt := 1; attempt <= 3 && ctx.Err() == nil && errors.Is(err, errProcessExited); attempt++ {
-		m.Logf("sing-box завершился; повтор подключения %d из 3 через 5 секунд", attempt)
+	// Повторяем, только если связь уже была установлена и оборвалась.
+	// Ошибки профиля и запуска так не лечатся и сразу показываются пользователю.
+	for attempt := 1; ctx.Err() == nil && (errors.Is(err, errProcessExited) || errors.Is(err, errCorpTerminated)); attempt++ {
+		reason := "sing-box завершился"
+		if errors.Is(err, errCorpTerminated) {
+			reason = err.Error()
+		}
+		m.Logf("%s; повторное подключение через %s (попытка %d)", reason, reconnectDelay, attempt)
 		m.update(func(s *State) { s.Status = StatusConnecting })
-		sleep(ctx, 5*time.Second)
+		sleep(ctx, reconnectDelay)
 		if ctx.Err() != nil {
 			break
 		}
@@ -370,7 +377,7 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 	m.log.Printf("подключение")
 	m.update(func(s *State) {
 		s.Corp.Up = false
-		s.Corp.Detail = "подключение…"
+		s.Corp.Detail = corpConnecting
 		s.Proxy.Checks = nil
 		s.Error = ""
 	})
@@ -412,10 +419,11 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 	runCtx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	exited := make(chan struct{})
+	output := newSessionOutput(m)
 	var runErr error
 	go func() {
 		defer close(exited)
-		runErr = runner.Run(runCtx, runner.Options{Exe: exe, Config: config, DataDir: m.paths.Data, Output: &sessionOutput{m: m}})
+		runErr = runner.Run(runCtx, runner.Options{Exe: exe, Config: config, DataDir: m.paths.Data, Output: output})
 	}()
 
 	if err := api.waitReady(ctx, 20*time.Second, exited); err != nil {
@@ -450,20 +458,59 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 		<-monitored
 	}()
 
-	select {
-	case <-ctx.Done():
-		stopRun()
-		<-exited
-		return nil
-	case <-exited:
-		if runErr == nil {
-			runErr = errors.New("sing-box неожиданно завершился")
+	corpDown := output.corpDown
+	for {
+		select {
+		case <-ctx.Done():
+			stopRun()
+			<-exited
+			return nil
+		case <-exited:
+			if runErr == nil {
+				runErr = errors.New("sing-box неожиданно завершился")
+			}
+			return fmt.Errorf("%w: %v%s", errProcessExited, runErr, m.log.tailHint())
+		case <-corpDown:
+			// sing-box не поднимает завершившийся endpoint OpenVPN сам, поэтому
+			// перезапускаем сессию целиком; VLESS прерывается на несколько секунд.
+			_, auth := output.corpTerminated()
+			if !m.allowCorpRetry() {
+				m.Logf("OpenVPN: %d перезапуска подряд не помогли, повторы остановлены до следующего подключения", maxCorpRetries)
+				corpDown = nil
+				continue
+			}
+			stopRun()
+			<-exited
+			if auth {
+				return fmt.Errorf("%w: сервер отклонил авторизацию", errCorpTerminated)
+			}
+			return errCorpTerminated
 		}
-		return fmt.Errorf("%w: %v%s", errProcessExited, runErr, m.log.tailHint())
 	}
 }
 
-var errProcessExited = errors.New("процесс sing-box неожиданно завершился")
+var (
+	errProcessExited  = errors.New("процесс sing-box неожиданно завершился")
+	errCorpTerminated = errors.New("OpenVPN отключился")
+)
+
+const (
+	reconnectDelay = 5 * time.Second
+	// Сервер иногда отвечает AUTH_FAILED на верные данные, но бесконечные
+	// повторы с неверным паролем заблокируют учётную запись, а ошибку
+	// сертификата перезапуск не исправит и только будет рвать VLESS.
+	maxCorpRetries = 3
+)
+
+func (m *Manager) allowCorpRetry() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.corpRetries >= maxCorpRetries {
+		return false
+	}
+	m.corpRetries++
+	return true
+}
 
 func (m *Manager) singBox() (string, func(), error) {
 	if m.singBoxPath != "" {
@@ -502,7 +549,10 @@ func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
 					_ = api.groupDelay(reqCtx, singbox.TagAuto)
 				}
 				cancel()
-				m.checkServices(ctx, api)
+				ok := m.checkServices(ctx, api)
+				if !ok && multi && m.failover(ctx, api) {
+					ok = m.checkServices(ctx, api)
+				}
 				if ctx.Err() != nil {
 					return
 				}
@@ -514,15 +564,25 @@ func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
 				}
 				m.healthWarning("DNS:", dnsErr != nil, "DNS: проверка разрешения внешних имён не прошла; сайты могут не открываться")
 				m.refreshProxies(ctx, api)
-				sleep(ctx, 60*time.Second)
+				// Пока зарубежные сайты недоступны, проверяем и ищем рабочий сервер чаще.
+				wait := 60 * time.Second
+				if !ok {
+					wait = reconnectDelay
+				}
+				sleep(ctx, wait)
 			}
 		}()
 	}
 
 	if in.OpenVPN != nil {
 		domains := in.Profile.Corporate.Domains
+		// Первые секунды туннель ещё поднимается: таймауты DNS — не ошибка.
+		lastUp, everUp := time.Now(), false
 		for ctx.Err() == nil {
-			up, detail := false, "подключение…"
+			up, detail := false, corpConnecting
+			if everUp {
+				detail = corpReconnecting
+			}
 			if len(domains) == 0 {
 				up, detail = false, "нет домена для проверки доступа"
 			} else {
@@ -533,9 +593,15 @@ func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
 				cancel()
 				if err == nil {
 					up, detail = true, "работает"
-				} else if !strings.Contains(err.Error(), "not ready") {
+				} else if !strings.Contains(err.Error(), "not ready") && time.Since(lastUp) > corpGrace {
 					detail = shortError(err)
 				}
+			}
+			if up {
+				lastUp, everUp = time.Now(), true
+				m.mu.Lock()
+				m.corpRetries = 0
+				m.mu.Unlock()
 			}
 			m.update(func(s *State) {
 				// Успешный ответ DNS API не отменяет явный отказ OpenVPN.
@@ -552,6 +618,51 @@ func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
 	}
 }
 
+const (
+	corpConnecting   = "подключение…"
+	corpReconnecting = "переподключение…"
+	// corpGrace — сколько ждать подъёма OpenVPN до показа ошибки: столько
+	// занимает рукопожатие и повторы sing-box после обрыва.
+	corpGrace = 30 * time.Second
+)
+
+// failover в режиме «авто» закрепляет сервер, через который открывается больше
+// всего сервисов. urltest меряет только YouTube и раз в 5 минут, поэтому после
+// обрыва долго держится за сервер, который уже не работает.
+func (m *Manager) failover(ctx context.Context, api *clash) bool {
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	proxies, err := api.proxies(reqCtx)
+	cancel()
+	if err != nil || m.Settings().Server != "" {
+		return false
+	}
+	selector := proxies[singbox.TagProxy]
+	var servers []string
+	for _, name := range selector.All {
+		if name != singbox.TagAuto {
+			servers = append(servers, name)
+		}
+	}
+	best := bestServer(ctx, api, servers)
+	if best == "" || ctx.Err() != nil {
+		return false
+	}
+	// Пользователь мог выбрать сервер вручную, пока шла проверка.
+	m.settingsMu.Lock()
+	defer m.settingsMu.Unlock()
+	if m.Settings().Server != "" || selector.Now == best {
+		return false
+	}
+	reqCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := api.selectProxy(reqCtx, singbox.TagProxy, best); err != nil {
+		m.Logf("VLESS: не удалось переключиться на %s: %v", best, err)
+		return false
+	}
+	m.Logf("VLESS: проверочные сайты недоступны, выбран сервер %s", best)
+	return true
+}
+
 func (m *Manager) refreshProxies(ctx context.Context, api *clash) {
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -563,6 +674,10 @@ func (m *Manager) refreshProxies(ctx context.Context, api *clash) {
 		sel := proxies[singbox.TagProxy]
 		if sel.Type == "Selector" || len(sel.All) > 0 {
 			s.Proxy.Selected = sel.Now
+			// failover закрепляет сервер в selector, но выбор пользователя — «авто».
+			if m.settings.Server == "" {
+				s.Proxy.Selected = singbox.TagAuto
+			}
 			current := sel.Now
 			if current == singbox.TagAuto {
 				current = proxies[singbox.TagAuto].Now

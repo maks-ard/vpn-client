@@ -122,7 +122,8 @@ function renderMain() {
     setBadge($("corp-badge"), "on", "вкл");
   } else {
     $("corp-sub").textContent = "OpenVPN · " + (corp.detail || "подключение…");
-    const failed = corp.detail && corp.detail !== "подключение…";
+    // «подключение…» и «переподключение…» — ожидание, а не ошибка.
+    const failed = corp.detail && !corp.detail.endsWith("…");
     setBadge($("corp-badge"), failed ? "bad" : "wait", failed ? "ошибка" : "ждём");
   }
 
