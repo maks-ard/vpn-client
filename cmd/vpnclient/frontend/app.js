@@ -216,6 +216,7 @@ function renderSettings() {
   $("version").textContent = version;
 
   const loaded = ovpn && ovpn.loaded;
+  $("ovpn-path-form").hidden = !!loaded;
   $("ovpn-name").textContent = loaded ? ovpn.name : "Файл не выбран";
   $("ovpn-server").textContent = loaded ? (ovpn.error || ovpn.server) : "Загрузите .ovpn от администратора";
   $("btn-ovpn").textContent = loaded ? "Заменить" : "Выбрать";
@@ -311,6 +312,47 @@ $("ovpn-path-form").addEventListener("submit", async (e) => {
   } catch (err) { showError(err); }
   finally { btn.disabled = false; btn.textContent = "Загрузить"; }
 });
+
+let discoveryStarted = false;
+async function findOVPN() {
+  const btn = $("btn-ovpn-find");
+  const list = $("ovpn-found");
+  btn.disabled = true;
+  btn.textContent = "Ищем…";
+  list.replaceChildren();
+  list.hidden = false;
+  try {
+    const profiles = await svc("FindOVPN");
+    if (!profiles.length) {
+      list.textContent = "Профили не найдены. Выберите файл вручную.";
+      list.classList.add("hint");
+    } else {
+      list.classList.remove("hint");
+      for (const profile of profiles) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "btn found-profile";
+        button.textContent = profile.name;
+        const path = document.createElement("small");
+        path.textContent = profile.path;
+        button.append(path);
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            await svc("LoadOVPN", profile.path);
+            await reloadSettings();
+            $("ovpn-path").value = "";
+            showToast("Конфигурация OpenVPN загружена", "info");
+          } catch (err) { showError(err); }
+          finally { button.disabled = false; }
+        });
+        list.append(button);
+      }
+    }
+  } catch (err) { list.hidden = true; showError(err); }
+  finally { btn.disabled = false; btn.textContent = "Повторить поиск"; }
+}
+$("btn-ovpn-find").addEventListener("click", findOVPN);
 $("btn-ovpn-remove").addEventListener("click", async () => {
   try { await svc("RemoveOVPN"); } catch (e) { showError(e); }
   await reloadSettings();
@@ -344,6 +386,11 @@ function showPage(name) {
   $("page-main").hidden = name !== "main";
   $("page-settings").hidden = name !== "settings";
   document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.page === name));
+  if (name === "settings" && ovpn && !ovpn.loaded && !discoveryStarted) {
+    discoveryStarted = true;
+    findOVPN();
+  }
+  hideHelp();
 }
 document.querySelectorAll(".nav-btn").forEach((b) => b.addEventListener("click", () => showPage(b.dataset.page)));
 
@@ -393,6 +440,37 @@ document.addEventListener("contextmenu", (e) => {
 });
 
 // ---------- старт ----------
+
+// Собственная геометрическая SVG-иконка, без внешних загрузок и лицензий.
+const tooltip = $("help-tooltip");
+let helpOwner = null;
+function hideHelp() {
+  tooltip.hidden = true;
+  helpOwner?.removeAttribute("aria-describedby");
+  helpOwner = null;
+}
+for (const button of document.querySelectorAll(".info-btn")) {
+  button.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></svg>';
+  const showHelp = () => {
+    hideHelp();
+    helpOwner = button;
+    tooltip.textContent = button.dataset.help;
+    tooltip.hidden = false;
+    button.setAttribute("aria-describedby", "help-tooltip");
+    const rect = button.getBoundingClientRect();
+    tooltip.style.left = Math.max(12, Math.min(rect.left, window.innerWidth - tooltip.offsetWidth - 12)) + "px";
+    tooltip.style.top = (rect.bottom + tooltip.offsetHeight + 8 < window.innerHeight
+      ? rect.bottom + 6 : Math.max(8, rect.top - tooltip.offsetHeight - 6)) + "px";
+  };
+  button.addEventListener("mouseenter", showHelp);
+  button.addEventListener("focus", showHelp);
+  button.addEventListener("mouseleave", (e) => { if (!tooltip.contains(e.relatedTarget)) hideHelp(); });
+  button.addEventListener("blur", hideHelp);
+  button.addEventListener("click", showHelp);
+}
+tooltip.addEventListener("mouseleave", hideHelp);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideHelp(); });
+$("page-settings").addEventListener("scroll", hideHelp);
 
 Events.On("state", (ev) => { state = ev.data; renderMain(); });
 Events.On("show-page", (ev) => showPage(ev.data));

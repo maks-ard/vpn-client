@@ -126,11 +126,12 @@
             <input class="input" id="ovpn-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\VPN\profile.ovpn">
             <button class="btn" id="btn-ovpn-load" type="submit">Загрузить</button>
           </div>
-          <div class="hint">Введите путь или выберите файл кнопкой выше. Сохраняется копия конфигурации.</div>
+          <div class="row"><button class="link-btn" id="btn-ovpn-find" type="button">Найти на компьютере</button><button class="info-btn" type="button" data-help="Поиск в папках OpenVPN пользователя и Program Files, включая пути из реестра. Сохраняется копия выбранного профиля." aria-label="О поиске OpenVPN"></button></div>
+          <div id="ovpn-found" class="stack-sm" aria-live="polite" hidden></div>
         </form>
         <div class="hint ok" id="ovpn-cert" hidden>
           <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>
-          Вход по сертификату из файла, пароль не нужен
+          Вход по сертификату
         </div>
         <div class="grid2" id="ovpn-auth" hidden>
           <div class="stack-sm">
@@ -143,14 +144,13 @@
           </div>
         </div>
         <div class="stack-sm" id="domains-block">
-          <div class="field-label">Домены через OpenVPN</div>
+          <div class="row"><div class="field-label">Домены через OpenVPN</div><button class="info-btn" type="button" data-help="Поддомены включаются автоматически. Подсети и DNS-домены от сервера добавляются сами." aria-label="О корпоративных доменах"></button></div>
           <div class="chips" id="chips">
             <form class="chip-add" id="domain-form">
               <label class="visually-hidden" for="domain-input">Новый домен</label>
               <input class="chip-input" id="domain-input" type="text" placeholder="+ домен" spellcheck="false" autocomplete="off">
             </form>
           </div>
-          <div class="hint">Поддомены включаются автоматически. Подсети от сервера добавляются сами.</div>
         </div>
         <button class="link-btn" id="btn-ovpn-remove" hidden>Удалить файл</button>
       </div>
@@ -159,13 +159,12 @@
     <section class="group">
       <div class="section-label">Маршрутизация</div>
       <div class="card list">
-        <label class="list-row">
+        <div class="list-row">
           <div class="card-text">
-            <div class="row-title">Российские сайты напрямую</div>
-            <div class="card-sub">Иначе через VLESS идёт всё, кроме работы</div>
+            <div class="row"><label class="row-title" for="opt-russia">Российские сайты напрямую</label><button class="info-btn" type="button" data-help="Если выключить, через VLESS пойдёт всё, кроме корпоративной и локальной сети." aria-label="О маршрутизации российских сайтов"></button></div>
           </div>
           <input class="switch" type="checkbox" id="opt-russia">
-        </label>
+        </div>
       </div>
     </section>
 
@@ -193,6 +192,7 @@
   </main>
 
   <div class="toast" id="toast" role="alert" hidden></div>
+  <div class="help-tooltip" id="help-tooltip" role="tooltip" hidden></div>
 
   <nav class="nav" aria-label="Разделы">
     <button class="nav-btn active" data-page="main">

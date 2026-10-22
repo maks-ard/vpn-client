@@ -172,6 +172,19 @@ button.card:hover { border-color: var(--border-strong); background: #1A1D24; }
 
 /* Поля */
 .field-label { font-size: 13px; color: var(--muted); }
+.info-btn {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 24px; height: 24px; padding: 3px; border: 0; border-radius: 50%;
+  color: var(--muted); background: transparent;
+}
+.info-btn:hover, .info-btn:focus-visible { color: var(--text); background: var(--surface-2); }
+.help-tooltip {
+  position: fixed; z-index: 50; max-width: min(300px, calc(100vw - 24px));
+  padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface-2); color: var(--text); font-size: 12px; line-height: 1.5;
+}
+.found-profile { height: auto; padding: 8px 10px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.found-profile small { display: block; color: var(--muted); margin-top: 3px; }
 .row { display: flex; gap: 8px; align-items: center; }
 .file-row { gap: 10px; }
 .stack-sm { display: flex; flex-direction: column; gap: 6px; }
