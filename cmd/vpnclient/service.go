@@ -51,6 +51,7 @@ type Service struct {
 
 	trayMu      sync.Mutex
 	lastIcon    string
+	lastIconAt  time.Time
 	lastTooltip string
 	lastMenu    string
 
@@ -626,9 +627,11 @@ func (s *Service) refreshTray(st app.State) {
 	case "unavailable":
 		status, iconName = "Служба недоступна", "tray-disconnected"
 	}
-	if iconName != s.lastIcon {
+	// Wails молча откатывает иконку, если Explorer ещё не зарегистрировал её
+	// (старт системы, перезапуск Explorer), поэтому периодически ставим заново.
+	if iconName != s.lastIcon || time.Since(s.lastIconAt) > 10*time.Second {
 		s.tray.SetIcon(icon(iconName))
-		s.lastIcon = iconName
+		s.lastIcon, s.lastIconAt = iconName, time.Now()
 	}
 
 	var parts []string
