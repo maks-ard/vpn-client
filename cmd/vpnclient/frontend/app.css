@@ -172,6 +172,9 @@ button.card:hover { border-color: var(--border-strong); background: #1A1D24; }
 
 /* Поля */
 .field-label { font-size: 13px; color: var(--muted); }
+.subscription-expiry { font-size: 13px; color: var(--text); line-height: 1.45; }
+.subscription-expiry.expired { color: var(--red); }
+.subscription-expiry.soon { color: var(--amber); }
 .check-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
 .check-ok { color: var(--accent); }
 .check-bad { color: var(--amber); }

@@ -295,7 +295,15 @@ func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}
 	m.cancel = nil
 	m.nextConnect = time.Now().Add(5 * time.Second)
 	m.api = nil
+	proxy := m.state.Proxy
 	m.state = m.idleState()
+	// Срок и лимиты подписки остаются полезны после отключения туннеля.
+	m.state.Proxy.Title = proxy.Title
+	m.state.Proxy.Expire = proxy.Expire
+	m.state.Proxy.Updated = proxy.Updated
+	m.state.Proxy.Used = proxy.Used
+	m.state.Proxy.Total = proxy.Total
+	m.state.Proxy.Outdated = proxy.Outdated
 	if err != nil && ctx.Err() == nil {
 		m.state.Status = StatusError
 		m.state.Error = err.Error()

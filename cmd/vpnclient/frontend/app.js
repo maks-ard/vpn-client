@@ -1,5 +1,6 @@
 import { Call, Events, Window, Clipboard } from "/wails/runtime.js";
 import { serverLabels, serverIcon } from "./servers.js";
+import { subscriptionExpiry } from "./subscription.js";
 
 // Методы Go-сервиса main.Service (cmd/vpnclient/service.go).
 const svc = (method, ...args) => Call.ByName("main.Service." + method, ...args);
@@ -297,14 +298,22 @@ function renderSettings() {
 
 function renderLinkInfo() {
   const info = $("link-info");
+  const expiry = $("subscription-expiry");
+  expiry.hidden = true;
+  if (state && settings && /^https?:\/\//i.test(settings.link || "")) {
+    const result = subscriptionExpiry(state.proxy.expire);
+    expiry.hidden = false;
+    expiry.textContent = result.text + (state.proxy.outdated ? " · сохранённые данные" : "");
+    expiry.className = "subscription-expiry" + (result.expired ? " expired" : result.soon ? " soon" : "");
+    expiry.title = result.detail || "Срок передаётся провайдером в заголовке Subscription-Userinfo при загрузке подписки.";
+    if (!validDate(state.proxy.updated) && !validDate(state.proxy.expire)) expiry.textContent = "Срок подписки появится после её загрузки";
+  }
   if (!state || !settings || !settings.link) { info.hidden = true; return; }
   const px = state.proxy;
   const parts = [];
   if (px.title) parts.push(px.title);
   if (px.servers && px.servers.length) parts.push(`серверов: ${px.servers.length}`);
   if (px.total > 0) parts.push(`${size(px.used)} из ${size(px.total)}`);
-  const expire = validDate(px.expire);
-  if (expire) parts.push("до " + expire.toLocaleDateString("ru-RU"));
   if (px.outdated) parts.push("не обновилась, используется сохранённая");
   info.hidden = parts.length === 0;
   info.textContent = parts.join(" · ");
