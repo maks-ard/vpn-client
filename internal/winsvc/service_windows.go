@@ -159,7 +159,7 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status 
 		case svc.Stop, svc.Shutdown:
 			status <- svc.Status{State: svc.StopPending}
 			cancel()
-			m.Disconnect()
+			m.DisconnectWithReason("остановка службы Windows")
 			listenerMu.Lock()
 			if listener != nil {
 				_ = listener.Close()
@@ -170,7 +170,7 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status 
 		}
 	}
 	cancel()
-	m.Disconnect()
+	m.DisconnectWithReason("завершение обработчика службы")
 	return false, 0
 }
 
@@ -244,6 +244,11 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 	}
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
+	// Обновление требует остановить TUN. Не обрываем работающий VPN ради релиза.
+	if m.Active() {
+		h.setStatus("Обновление отложено до отключения VPN")
+		return
+	}
 
 	c := update.NewChecker()
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -266,6 +271,12 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 		m.Logf("обновление: %v", err)
 		return
 	}
+	if !m.WhileIdle(func() { h.installUpdate(m, rel, path) }) {
+		h.setStatus("Обновление загружено; установка отложена до отключения VPN")
+	}
+}
+
+func (h *handler) installUpdate(m *app.Manager, rel *update.Release, path string) {
 	exe, err := os.Executable()
 	if err != nil {
 		h.setStatus("")
@@ -276,9 +287,6 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 		h.setStatus("")
 		m.Logf("обновление: %v", err)
 		return
-	}
-	if m.Active() {
-		_ = os.WriteFile(resumeFile(Paths()), nil, 0o600)
 	}
 	h.setStatus("Перезапуск после обновления до " + rel.Version)
 	m.Logf("обновление: установлена %s, перезапуск службы", rel.Version)

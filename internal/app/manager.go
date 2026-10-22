@@ -84,12 +84,13 @@ type Manager struct {
 	// singBoxPath — внешний sing-box вместо встроенного (для разработки).
 	singBoxPath string
 
-	mu       sync.Mutex
-	settings Settings
-	state    State
-	cancel   context.CancelFunc
-	done     chan struct{}
-	api      *clash
+	mu          sync.Mutex
+	maintenance sync.Mutex
+	settings    Settings
+	state       State
+	cancel      context.CancelFunc
+	done        chan struct{}
+	api         *clash
 }
 
 func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
@@ -141,7 +142,7 @@ func (m *Manager) SaveSettings(s Settings) error {
 
 	if active && routingChanged(old, s) {
 		m.log.Printf("настройки изменены, переподключение")
-		m.Disconnect()
+		m.DisconnectWithReason("изменение настроек маршрутизации")
 		m.Connect()
 	}
 	return nil
@@ -181,7 +182,7 @@ func (m *Manager) reconnectIfActive(reason string) {
 	m.notify(state)
 	if active {
 		m.log.Printf("%s, переподключение", reason)
-		m.Disconnect()
+		m.DisconnectWithReason(reason)
 		m.Connect()
 	}
 }
@@ -209,6 +210,8 @@ func (m *Manager) Toggle() {
 
 // Connect запускает подключение в фоне и сразу возвращается.
 func (m *Manager) Connect() {
+	m.maintenance.Lock()
+	defer m.maintenance.Unlock()
 	m.mu.Lock()
 	if m.cancel != nil {
 		m.mu.Unlock()
@@ -227,14 +230,32 @@ func (m *Manager) Connect() {
 	go m.run(ctx, settings, done)
 }
 
+// WhileIdle не даёт начать подключение посреди замены exe и запуска перезапуска.
+// Длительные сетевые загрузки должны выполняться до входа в эту секцию.
+func (m *Manager) WhileIdle(fn func()) bool {
+	m.maintenance.Lock()
+	defer m.maintenance.Unlock()
+	if m.Active() {
+		return false
+	}
+	fn()
+	return true
+}
+
 // Disconnect останавливает sing-box и ждёт, пока он уберёт маршруты.
 func (m *Manager) Disconnect() {
+	m.DisconnectWithReason("команда приложения")
+}
+
+// DisconnectWithReason сохраняет источник остановки, не записывая настройки и секреты.
+func (m *Manager) DisconnectWithReason(reason string) {
 	m.mu.Lock()
 	cancel, done := m.cancel, m.done
 	m.mu.Unlock()
 	if cancel == nil {
 		return
 	}
+	m.log.Printf("запрошено отключение: %s", reason)
 	cancel()
 	<-done
 }
@@ -242,6 +263,17 @@ func (m *Manager) Disconnect() {
 func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}) {
 	defer close(done)
 	err := m.session(ctx, settings)
+	// Ограниченные повторы только после аварийного завершения процесса.
+	// Ошибки профиля и авторизации нельзя лечить бесконечными переподключениями.
+	for attempt := 1; attempt <= 3 && ctx.Err() == nil && errors.Is(err, errProcessExited); attempt++ {
+		m.Logf("sing-box завершился; повтор подключения %d из 3 через 5 секунд", attempt)
+		m.update(func(s *State) { s.Status = StatusConnecting })
+		sleep(ctx, 5*time.Second)
+		if ctx.Err() != nil {
+			break
+		}
+		err = m.session(ctx, settings)
+	}
 
 	m.mu.Lock()
 	m.cancel = nil
@@ -261,6 +293,12 @@ func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}
 
 func (m *Manager) session(ctx context.Context, settings Settings) error {
 	m.log.Printf("подключение")
+	m.update(func(s *State) {
+		s.Corp.Up = false
+		s.Corp.Detail = "подключение…"
+		s.Error = ""
+	})
+	m.healthWarning("OpenVPN:", false, "")
 	prof, err := settings.profile(m.paths)
 	if err != nil {
 		return err
@@ -301,7 +339,7 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 	var runErr error
 	go func() {
 		defer close(exited)
-		runErr = runner.Run(runCtx, runner.Options{Exe: exe, Config: config, DataDir: m.paths.Data, Output: m.log})
+		runErr = runner.Run(runCtx, runner.Options{Exe: exe, Config: config, DataDir: m.paths.Data, Output: &sessionOutput{m: m}})
 	}()
 
 	if err := api.waitReady(ctx, 20*time.Second, exited); err != nil {
@@ -326,8 +364,15 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 	m.log.Printf("подключено")
 
 	monitorCtx, stopMonitor := context.WithCancel(ctx)
-	defer stopMonitor()
-	go m.monitor(monitorCtx, api, in)
+	monitored := make(chan struct{})
+	go func() {
+		defer close(monitored)
+		m.monitor(monitorCtx, api, in)
+	}()
+	defer func() {
+		stopMonitor()
+		<-monitored
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -338,9 +383,11 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 		if runErr == nil {
 			runErr = errors.New("sing-box неожиданно завершился")
 		}
-		return fmt.Errorf("%w%s", runErr, m.log.tailHint())
+		return fmt.Errorf("%w: %v%s", errProcessExited, runErr, m.log.tailHint())
 	}
 }
+
+var errProcessExited = errors.New("процесс sing-box неожиданно завершился")
 
 func (m *Manager) singBox() (string, func(), error) {
 	if m.singBoxPath != "" {
@@ -355,7 +402,11 @@ func (m *Manager) singBox() (string, func(), error) {
 
 // monitor обновляет скорость, пинг и состояние OpenVPN, пока VPN подключён.
 func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
+	var workers sync.WaitGroup
+	defer workers.Wait()
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		for ctx.Err() == nil {
 			_ = api.traffic(ctx, func(t traffic) {
 				m.update(func(s *State) { s.Up, s.Down = t.Up, t.Down })
@@ -366,15 +417,29 @@ func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
 
 	multi := len(in.Servers) > 1
 	if len(in.Servers) > 0 {
+		workers.Add(1)
 		go func() {
+			defer workers.Done()
 			for ctx.Err() == nil {
 				reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				if multi {
 					_ = api.groupDelay(reqCtx, singbox.TagAuto)
-				} else {
-					_, _ = api.delay(reqCtx, singbox.TagProxy)
 				}
 				cancel()
+				probeCtx, probeCancel := context.WithTimeout(ctx, 8*time.Second)
+				_, err := api.delay(probeCtx, singbox.TagProxy)
+				probeCancel()
+				if ctx.Err() != nil {
+					return
+				}
+				m.healthWarning("Прокси:", err != nil, "Прокси: проверка доступа не прошла; VPN запущен, но зарубежные сайты могут быть недоступны")
+				dnsCtx, dnsCancel := context.WithTimeout(ctx, 8*time.Second)
+				dnsErr := api.dnsQuery(dnsCtx, "www.youtube.com")
+				dnsCancel()
+				if ctx.Err() != nil {
+					return
+				}
+				m.healthWarning("DNS:", dnsErr != nil, "DNS: проверка разрешения внешних имён не прошла; сайты могут не открываться")
 				m.refreshProxies(ctx, api)
 				sleep(ctx, 60*time.Second)
 			}
@@ -386,7 +451,7 @@ func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
 		for ctx.Err() == nil {
 			up, detail := false, "подключение…"
 			if len(domains) == 0 {
-				up, detail = true, "работает"
+				up, detail = false, "нет домена для проверки доступа"
 			} else {
 				reqCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 				// Случайный поддомен не попадает в кэш DNS: ответ (даже NXDOMAIN)
@@ -399,7 +464,12 @@ func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
 					detail = shortError(err)
 				}
 			}
-			m.update(func(s *State) { s.Corp.Up, s.Corp.Detail = up, detail })
+			m.update(func(s *State) {
+				// Успешный ответ DNS API не отменяет явный отказ OpenVPN.
+				if s.Corp.Detail != corpAuthFailed {
+					s.Corp.Up, s.Corp.Detail = up, detail
+				}
+			})
 			wait := 5 * time.Second
 			if up {
 				wait = 20 * time.Second

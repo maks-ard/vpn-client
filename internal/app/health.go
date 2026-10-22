@@ -1,0 +1,64 @@
+package app
+
+import (
+	"strings"
+	"sync"
+)
+
+const corpAuthFailed = "сервер OpenVPN отклонил авторизацию; проверьте учётные данные и параллельные подключения"
+
+// sessionOutput разбирает только завершённые строки текущего процесса:
+// сообщения OpenVPN не должны теряться среди ошибок DNS или оставаться от прошлой сессии.
+type sessionOutput struct {
+	m    *Manager
+	mu   sync.Mutex
+	part string
+}
+
+func (o *sessionOutput) Write(p []byte) (int, error) {
+	n, err := o.m.log.Write(p)
+	o.mu.Lock()
+	lines := strings.Split(o.part+string(p), "\n")
+	o.part = lines[len(lines)-1]
+	if len(o.part) > 64<<10 {
+		o.part = ""
+	}
+	o.mu.Unlock()
+	for _, line := range lines[:len(lines)-1] {
+		if strings.Contains(line, "endpoint/openvpn-client[corp]") && strings.Contains(line, "authentication failed") {
+			o.m.update(func(s *State) {
+				s.Corp.Up = false
+				s.Corp.Detail = corpAuthFailed
+			})
+			o.m.healthWarning("OpenVPN:", true, "OpenVPN: "+corpAuthFailed)
+		}
+	}
+	return n, err
+}
+
+func (m *Manager) healthWarning(prefix string, failed bool, message string) {
+	changed := false
+	m.update(func(s *State) {
+		warnings := make([]string, 0, len(s.Warnings)+1)
+		found := false
+		for _, w := range s.Warnings {
+			if strings.HasPrefix(w, prefix) {
+				found = true
+			} else {
+				warnings = append(warnings, w)
+			}
+		}
+		if failed {
+			warnings = append(warnings, message)
+		}
+		changed = found != failed
+		s.Warnings = warnings
+	})
+	if changed {
+		if failed {
+			m.Logf("проверка связи: %s", message)
+		} else {
+			m.Logf("проверка связи: %s доступ восстановлен", prefix)
+		}
+	}
+}

@@ -234,6 +234,7 @@ func copyExe(src, dst string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	defer os.Remove(tmp)
 	return update.Replace(dst, tmp)
 }
 

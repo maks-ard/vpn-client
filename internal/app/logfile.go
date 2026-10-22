@@ -29,6 +29,17 @@ func newLogFile(path string) *logFile {
 	return &logFile{path: path}
 }
 
+func (l *logFile) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return nil
+	}
+	err := l.f.Close()
+	l.f = nil
+	return err
+}
+
 func (l *logFile) Printf(format string, a ...any) {
 	line := time.Now().Format("2006-01-02 15:04:05") + " vpnclient: " + fmt.Sprintf(format, a...) + "\n"
 	_, _ = l.Write([]byte(line))

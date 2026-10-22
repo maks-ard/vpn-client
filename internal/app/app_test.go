@@ -114,6 +114,7 @@ func TestManagerWithSingBox(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.singBoxPath = exe
+	t.Cleanup(func() { m.Disconnect(); _ = m.log.Close() })
 	m.inbound = singbox.M{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 0}
 	if err := m.SaveSettings(Settings{Link: sub.URL, RussiaDirect: false}); err != nil {
 		t.Fatal(err)
@@ -170,6 +171,7 @@ func TestLogRedactsSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = m.log.Close() })
 	link := "https://sub.example.com/secret-token-123"
 	if err := m.SaveSettings(Settings{Link: link}); err != nil {
 		t.Fatal(err)

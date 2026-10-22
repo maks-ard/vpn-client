@@ -231,19 +231,17 @@ func (s *Service) ShowWindow() {
 	s.window.Focus()
 }
 
-// Quit — «Выход» в трее: отключаем VPN и закрываем окно.
+// Quit — «Выход» в трее: закрываем окно, не останавливая VPN в службе.
 func (s *Service) Quit() {
+	s.log.Info("выход из окна; VPN продолжает работать в службе")
 	s.quitting.Store(true)
 	s.wapp.Quit()
 }
 
 func (s *Service) shutdown() {
 	s.quitting.Store(true)
-	if !s.relaunched.Load() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = s.client.Disconnect(ctx)
-		cancel()
-	}
+	// Жизненный цикл окна не должен управлять соединением службы:
+	// обновление, выход из Windows и закрытие второго окна не равны «Отключить».
 	s.cancel()
 }
 

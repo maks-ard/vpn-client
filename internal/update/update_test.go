@@ -104,6 +104,10 @@ func TestReplace(t *testing.T) {
 	if got, _ := os.ReadFile(installed + ".old"); string(got) != "old" {
 		t.Errorf(".old = %q", got)
 	}
+	// Источник остаётся доступным до успешного перезапуска и для восстановления.
+	if got, err := os.ReadFile(newFile); err != nil || string(got) != "new" {
+		t.Fatalf("исходный exe потерян: %q %v", got, err)
+	}
 	// .old занят (в Windows — запущенный файл): текущая копия уходит под
 	// уникальное имя. Здесь занятость имитируем каталогом с содержимым.
 	_ = os.Remove(installed + ".old")
@@ -122,5 +126,20 @@ func TestReplace(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(installed); string(got) != "newer" {
 		t.Errorf("после отката installed = %q", got)
+	}
+}
+
+func TestReplaceMissingInstalled(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "download.exe")
+	installed := filepath.Join(dir, "vpnclient.exe")
+	if err := os.WriteFile(source, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Replace(installed, source); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(installed); err != nil || string(got) != "new" {
+		t.Fatalf("восстановление отсутствующего exe: %q %v", got, err)
 	}
 }

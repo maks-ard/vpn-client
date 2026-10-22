@@ -120,7 +120,20 @@ func (c *clash) groupDelay(ctx context.Context, group string) error {
 // NXDOMAIN — нормальный ответ.
 func (c *clash) dnsQuery(ctx context.Context, name string) error {
 	q := url.Values{"name": {name}, "type": {"A"}}
-	return c.do(ctx, http.MethodGet, "/dns/query?"+q.Encode(), nil, nil)
+	var response struct {
+		Status *int `json:"Status"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/dns/query?"+q.Encode(), nil, &response); err != nil {
+		return err
+	}
+	// Clash API возвращает HTTP 200 даже для SERVFAIL и REFUSED.
+	if response.Status == nil {
+		return fmt.Errorf("DNS: в ответе нет кода результата")
+	}
+	if *response.Status != 0 && *response.Status != 3 {
+		return fmt.Errorf("DNS: сервер вернул код %d", *response.Status)
+	}
+	return nil
 }
 
 type traffic struct {

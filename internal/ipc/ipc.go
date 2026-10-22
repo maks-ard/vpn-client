@@ -106,6 +106,7 @@ func (s *Server) Handler() http.Handler {
 		reply(w, nil, s.m.SaveSettings(settings))
 	})
 	mux.HandleFunc("POST /v1/toggle", func(w http.ResponseWriter, r *http.Request) {
+		s.m.Logf("IPC: переключение VPN из окна или трея")
 		go s.m.Toggle()
 		reply(w, nil, nil)
 	})
@@ -114,7 +115,7 @@ func (s *Server) Handler() http.Handler {
 		reply(w, nil, nil)
 	})
 	mux.HandleFunc("POST /v1/disconnect", func(w http.ResponseWriter, r *http.Request) {
-		s.m.Disconnect()
+		s.m.DisconnectWithReason("IPC: команда отключения из окна")
 		reply(w, nil, nil)
 	})
 	mux.HandleFunc("POST /v1/ovpn", func(w http.ResponseWriter, r *http.Request) {

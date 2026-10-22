@@ -185,6 +185,32 @@ func equal(a, b []byte) bool {
 // нельзя перезаписать, но можно переименовать: старый уходит в .old и
 // удаляется при следующем обновлении.
 func Replace(installed, newFile string) error {
+	// Готовим файл рядом с установленным: перенос из ProgramData сохраняет
+	// закрытый ACL и лишает обычное окно права читать и запускать exe.
+	in, err := os.Open(newFile)
+	if err != nil {
+		return fmt.Errorf("подготовка exe: %w", err)
+	}
+	defer in.Close()
+	f, err := os.CreateTemp(filepath.Dir(installed), ".vpnclient-*.exe")
+	if err != nil {
+		return fmt.Errorf("подготовка exe: %w", err)
+	}
+	staged := f.Name()
+	defer os.Remove(staged)
+	_, err = io.Copy(f, in)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = prepareExecutable(staged)
+	}
+	if err != nil {
+		return fmt.Errorf("подготовка exe: %w", err)
+	}
 	old := installed + ".old"
 	if err := os.Remove(old); err != nil && !errors.Is(err, os.ErrNotExist) {
 		// Прошлая копия ещё запущена (например, окно старой версии) — отодвигаем
@@ -194,8 +220,10 @@ func Replace(installed, newFile string) error {
 	if err := os.Rename(installed, old); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("замена exe: %w", err)
 	}
-	if err := os.Rename(newFile, installed); err != nil {
-		_ = os.Rename(old, installed)
+	if err := os.Rename(staged, installed); err != nil {
+		if rollbackErr := os.Rename(old, installed); rollbackErr != nil {
+			return fmt.Errorf("замена exe: %v; откат не выполнен: %w", err, rollbackErr)
+		}
 		return fmt.Errorf("замена exe: %w", err)
 	}
 	return nil
