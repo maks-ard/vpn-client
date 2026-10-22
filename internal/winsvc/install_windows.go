@@ -1,6 +1,7 @@
 package winsvc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,12 +18,28 @@ import (
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 
+	"github.com/maks-ard/vpn-client/internal/ipc"
 	"github.com/maks-ard/vpn-client/internal/update"
 )
 
 // Install (с правами администратора) копирует программу в Program Files,
 // создаёт или обновляет службу и запускает её.
-func Install() error {
+func Install() (result error) {
+	// Win32 mutex принадлежит потоку, а не горутине.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	// Два установщика не должны одновременно останавливать службу и менять exe.
+	name, _ := windows.UTF16PtrFromString(`Global\vpn-client-install`)
+	lock, err := windows.CreateMutex(nil, false, name)
+	if err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		return fmt.Errorf("блокировка установки: %w", err)
+	}
+	defer windows.CloseHandle(lock)
+	wait, err := windows.WaitForSingleObject(lock, 0)
+	if err != nil || (wait != windows.WAIT_OBJECT_0 && wait != windows.WAIT_ABANDONED) {
+		return errors.New("другая установка уже выполняется")
+	}
+	defer windows.ReleaseMutex(lock)
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -37,20 +54,105 @@ func Install() error {
 
 	s, err := m.OpenService(Name)
 	exists := err == nil
+	if err != nil && !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return fmt.Errorf("открытие службы: %w", err)
+	}
+	wasRunning := false
+	var original mgr.Config
 	if exists {
 		defer s.Close()
+		st, err := s.Query()
+		if err != nil {
+			return fmt.Errorf("состояние службы: %w", err)
+		}
+		wasRunning = st.State != svc.Stopped
+		original, err = s.Config()
+		if err != nil {
+			return fmt.Errorf("регистрация службы повреждена: %w; перезагрузите Windows и повторите установку", err)
+		}
+	}
+
+	// Все операции подготовки выполняются до остановки действующей службы.
+	if err := os.MkdirAll(InstallDir(), 0o755); err != nil {
+		return err
+	}
+	if err := secureDir(DataRoot()); err != nil {
+		return fmt.Errorf("права на данные службы: %w", err)
+	}
+	if err := secureLogDir(LogDir()); err != nil {
+		return fmt.Errorf("права на журнал: %w", err)
+	}
+	var staged, backup string
+	replaced := false
+	if !samePath(self, target) {
+		staged, err = prepareInstallCopy(self)
+		if err != nil {
+			return err
+		}
+		defer os.Remove(staged)
+		if _, err := os.Stat(target); err == nil {
+			backup, err = prepareInstallCopy(target)
+			if err != nil {
+				return err
+			}
+			defer os.Remove(backup)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	defer func() {
+		if !exists && s != nil {
+			s.Close()
+		}
+	}()
+	defer func() {
+		if result == nil {
+			return
+		}
+		// Не оставляем рабочую установку остановленной после неудачного обновления.
+		if backup != "" && replaced {
+			if s != nil {
+				if err := stopAndWait(s); err != nil {
+					result = errors.Join(result, fmt.Errorf("остановка для отката: %w", err))
+					return
+				}
+			}
+			if err := update.Replace(target, backup); err != nil {
+				result = errors.Join(result, fmt.Errorf("откат exe: %w", err))
+			}
+		}
+		if exists && wasRunning {
+			if err := stopAndWait(s); err != nil {
+				result = errors.Join(result, fmt.Errorf("остановка перед восстановлением регистрации: %w", err))
+				return
+			}
+			if err := s.UpdateConfig(original); err != nil {
+				result = errors.Join(result, fmt.Errorf("откат регистрации службы: %w", err))
+			}
+			result = errors.Join(result, startWithRetry(s))
+		} else if exists {
+			if err := stopAndWait(s); err != nil {
+				result = errors.Join(result, err)
+			}
+			if err := s.UpdateConfig(original); err != nil {
+				result = errors.Join(result, fmt.Errorf("откат регистрации службы: %w", err))
+			}
+		} else if s != nil {
+			// Новую регистрацию сохраняем для повторной установки, но не
+			// оставляем службу работать после сообщения о неудачной установке.
+			result = errors.Join(result, stopAndWait(s))
+		}
+	}()
+	if exists {
 		if err := stopAndWait(s); err != nil {
 			return err
 		}
 	}
-
-	if !samePath(self, target) {
-		if err := os.MkdirAll(InstallDir(), 0o755); err != nil {
+	if staged != "" {
+		if err := update.Replace(target, staged); err != nil {
 			return err
 		}
-		if err := copyExe(self, target); err != nil {
-			return err
-		}
+		replaced = true
 	}
 
 	cfg := mgr.Config{
@@ -75,30 +177,24 @@ func Install() error {
 		if err != nil {
 			return fmt.Errorf("создание службы: %w", err)
 		}
-		defer s.Close()
 	}
 
 	// Если служба упадёт, Windows перезапустит её сама.
-	_ = s.SetRecoveryActions([]mgr.RecoveryAction{
+	if err := s.SetRecoveryActions([]mgr.RecoveryAction{
 		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 15 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: time.Minute},
-	}, 24*60*60)
+	}, 24*60*60); err != nil {
+		return fmt.Errorf("восстановление службы после сбоя: %w", err)
+	}
 
-	if err := os.MkdirAll(DataRoot(), 0o700); err != nil {
-		return err
-	}
-	if err := secureDir(DataRoot()); err != nil {
-		return fmt.Errorf("права на %s: %w", DataRoot(), err)
-	}
-	if err := secureLogDir(LogDir()); err != nil {
-		return fmt.Errorf("права на %s: %w", LogDir(), err)
-	}
 	if err := startWithRetry(s); err != nil {
 		return err
 	}
 
-	_ = createShortcut(target)
+	if err := createShortcut(target); err != nil {
+		return fmt.Errorf("создание ярлыка в меню «Пуск»: %w", err)
+	}
 	return nil
 }
 
@@ -154,9 +250,9 @@ func startWithRetry(s *mgr.Service) error {
 		err = s.Start()
 		switch {
 		case err == nil, errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING):
-			return nil
+			return waitServiceReady(s)
 		case errors.Is(err, windows.ERROR_FILE_NOT_FOUND), errors.Is(err, windows.ERROR_PATH_NOT_FOUND):
-			return errors.New(AntivirusHint)
+			return fmt.Errorf("запуск службы: %w; проверьте путь службы, наличие exe и журнал защитного ПО", err)
 		case errors.Is(err, windows.ERROR_ACCESS_DENIED):
 			continue
 		default:
@@ -165,6 +261,57 @@ func startWithRetry(s *mgr.Service) error {
 	}
 	return fmt.Errorf("запуск службы: %w. Вероятно, запуск блокирует антивирус: добавьте "+
 		"C:\\Program Files\\vpn-client в исключения и доверенные программы", err)
+}
+
+// Подготовленная копия уже имеет окончательные права до остановки службы.
+func prepareInstallCopy(src string) (string, error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("чтение установочного exe: %w", err)
+	}
+	defer in.Close()
+	f, err := os.CreateTemp(InstallDir(), ".install-*.exe")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	_, err = io.Copy(f, in)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = update.PrepareExecutable(path)
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func waitServiceReady(s *mgr.Service) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client := ipc.NewClient(ipc.Dial)
+	return awaitServiceReady(ctx, func() (bool, error) {
+		st, err := s.Query()
+		if err != nil {
+			return false, err
+		}
+		if st.State == svc.Stopped {
+			return false, fmt.Errorf("служба остановилась при запуске (Win32=%d, service=%d)", st.Win32ExitCode, st.ServiceSpecificExitCode)
+		}
+		if st.State != svc.Running {
+			return false, nil
+		}
+		probeCtx, probeCancel := context.WithTimeout(ctx, time.Second)
+		defer probeCancel()
+		info, err := client.Info(probeCtx)
+		return err == nil && samePath(info.Exe, InstalledExe()), nil
+	})
 }
 
 func stopAndWait(s *mgr.Service) error {
@@ -286,10 +433,14 @@ func shortcutPath() string {
 // COM-объект WScript.Shell напрямую — без запуска PowerShell (скрытый
 // PowerShell антивирусы справедливо считают признаком вредоноса).
 func createShortcut(target string) error {
+	return createShortcutAt(target, shortcutPath())
+}
+
+func createShortcutAt(target, path string) error {
 	// COM требует, чтобы горутина не переезжала между потоками.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil && !isCOMInitialized(err) {
 		return err
 	}
 	defer ole.CoUninitialize()
@@ -304,7 +455,7 @@ func createShortcut(target string) error {
 		return err
 	}
 	defer shell.Release()
-	res, err := oleutil.CallMethod(shell, "CreateShortcut", shortcutPath())
+	res, err := oleutil.CallMethod(shell, "CreateShortcut", path)
 	if err != nil {
 		return err
 	}

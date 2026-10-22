@@ -229,6 +229,9 @@ func Replace(installed, newFile string) error {
 	return nil
 }
 
+// PrepareExecutable задаёт права запуска для подготовленного установщиком exe.
+func PrepareExecutable(path string) error { return prepareExecutable(path) }
+
 // Newer сообщает, что версия latest новее current. Сборки разработчика
 // ("dev" и всё, что не похоже на vX.Y.Z) не обновляются.
 func Newer(latest, current string) bool {
