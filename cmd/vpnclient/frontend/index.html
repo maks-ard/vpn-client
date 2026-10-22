@@ -90,10 +90,20 @@
         </div>
       </div>
     </section>
+    <section class="group" id="checks-block" hidden>
+      <div class="row version-row"><div class="section-label">Доступ через VLESS</div><button class="link-btn" id="btn-check-now">Проверить сейчас</button></div>
+      <div id="service-checks" class="stack-sm"></div>
+      <div class="hint" id="checks-time"></div>
+    </section>
   </main>
 
   <main class="page" id="page-settings" hidden>
     <h1 class="page-title">Настройки</h1>
+    <div class="stack-sm" id="setup-intro" hidden>
+      <div class="card-title">Добавьте подключение</div>
+      <div class="hint">OpenVPN для работы или VLESS для зарубежных сайтов. Можно настроить только один канал.</div>
+      <button class="link-btn" id="btn-setup-connect">Перейти к подключению</button>
+    </div>
 
     <section class="group">
       <div class="section-label">Зарубежные серверы · VLESS</div>
@@ -121,6 +131,7 @@
           <button class="btn" id="btn-ovpn">Выбрать</button>
         </div>
         <form class="stack-sm" id="ovpn-path-form">
+          <button class="btn" id="btn-ovpn-browse" type="button">Выбрать файл…</button>
           <label class="field-label" for="ovpn-path">Путь к файлу OpenVPN</label>
           <div class="row">
             <input class="input" id="ovpn-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\VPN\profile.ovpn">
@@ -141,6 +152,7 @@
           <div class="stack-sm">
             <label class="field-label" for="ovpn-pass">Пароль</label>
             <input class="input" id="ovpn-pass" type="password" autocomplete="off">
+            <button class="link-btn" id="btn-password" type="button" aria-pressed="false">Показать</button>
           </div>
         </div>
         <div class="stack-sm" id="domains-block">
@@ -189,6 +201,16 @@
         <button class="link-btn" id="btn-update">Проверить обновления</button>
       </div>
     </section>
+    <section class="stack-sm" id="settings-actions" hidden>
+      <div class="hint" id="settings-impact"></div>
+      <div class="row"><button class="btn" id="btn-apply">Применить</button><button class="btn" id="btn-discard">Отменить</button></div>
+    </section>
+    <button class="link-btn" id="btn-settings-undo" hidden>Вернуть предыдущие настройки</button>
+    <button class="link-btn" id="btn-diagnostics">Подготовить диагностику</button>
+    <section class="stack-sm" id="diagnostics-block" hidden>
+      <textarea id="diagnostics-preview" class="input diagnostics" readonly aria-label="Предпросмотр диагностики"></textarea>
+      <button class="btn" id="btn-diagnostics-copy">Скопировать диагностику</button>
+    </section>
   </main>
 
   <div class="toast" id="toast" role="alert" hidden></div>
@@ -209,7 +231,7 @@
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
       <div class="sheet-head">
         <div class="sheet-title" id="sheet-title">Сервер</div>
-        <button class="btn" id="btn-ping">Проверить пинг</button>
+        <button class="btn" id="btn-ping">Проверить задержку</button>
       </div>
       <div class="sheet-list" id="server-list"></div>
       <button class="btn wide" id="btn-sheet-close">Закрыть</button>

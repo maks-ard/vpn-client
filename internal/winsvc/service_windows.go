@@ -150,12 +150,25 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status 
 		h.updateLoop(ctx, m)
 	}()
 
-	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPowerEvent}
 	m.Logf("служба запущена")
 	for req := range requests {
 		switch req.Cmd {
 		case svc.Interrogate:
 			status <- req.CurrentStatus
+		case svc.PowerEvent:
+			// PBT_APMRESUMEAUTOMATIC/PBT_APMRESUMESUSPEND: не пересоздаём
+			// TUN из-за пробуждения, сначала обновляем состояние соединения.
+			if req.EventType == 0x12 || req.EventType == 0x07 {
+				go func() {
+					defer recoverLog(m, "проверка после сна")
+					m.Logf("Windows возобновила работу: проверка соединения")
+					sleepCtx(ctx, 5*time.Second)
+					if ctx.Err() == nil && m.Active() {
+						m.TestServers()
+					}
+				}()
+			}
 		case svc.Stop, svc.Shutdown:
 			status <- svc.Status{State: svc.StopPending}
 			cancel()
@@ -244,12 +257,7 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 	}
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
-	// Обновление требует остановить TUN. Не обрываем работающий VPN ради релиза.
-	if m.Active() {
-		h.setStatus("Обновление отложено до отключения VPN")
-		return
-	}
-
+	h.setStatus("Проверка обновлений…")
 	c := update.NewChecker()
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	rel, err := c.Latest(checkCtx)
@@ -263,11 +271,16 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 		h.setStatus("обновлений нет, проверено в " + time.Now().Format("15:04"))
 		return
 	}
+	// Версию проверяем и при активном VPN, но установку откладываем.
+	if m.Active() {
+		h.setStatus("Доступна " + rel.Version + "; обновление отложено до отключения VPN")
+		return
+	}
 	m.Logf("обновление: загружаю %s", rel.Version)
 	h.setStatus("Загружается " + rel.Version)
 	path, err := c.Download(ctx, rel, filepath.Join(Paths().Data, "update"))
 	if err != nil {
-		h.setStatus("")
+		h.setStatus("Ошибка загрузки обновления; подробности в журнале")
 		m.Logf("обновление: %v", err)
 		return
 	}
@@ -279,18 +292,19 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 func (h *handler) installUpdate(m *app.Manager, rel *update.Release, path string) {
 	exe, err := os.Executable()
 	if err != nil {
-		h.setStatus("")
+		h.setStatus("Ошибка определения установленного exe")
 		m.Logf("обновление: %v", err)
 		return
 	}
 	if err := update.Replace(exe, path); err != nil {
-		h.setStatus("")
+		h.setStatus("Не удалось установить обновление; подробности в журнале")
 		m.Logf("обновление: %v", err)
 		return
 	}
 	h.setStatus("Перезапуск после обновления до " + rel.Version)
 	m.Logf("обновление: установлена %s, перезапуск службы", rel.Version)
 	if err := startDetached(exe, "--restart-service"); err != nil {
+		h.setStatus("Обновление записано, но перезапуск службы не запущен")
 		m.Logf("обновление: перезапуск службы: %v", err)
 	}
 }

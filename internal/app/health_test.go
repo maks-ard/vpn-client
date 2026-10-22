@@ -50,8 +50,23 @@ func TestServiceProbes(t *testing.T) {
 		t.Fatalf("проверено %d сервисов вместо 4", len(seen))
 	}
 	warnings := m.State().Warnings
+	checks := m.State().Proxy.Checks
+	if len(checks) != 4 || checks[3].OK || checks[3].Name != "Claude" || checks[0].CheckedAt.IsZero() {
+		t.Fatalf("неверные результаты проверок: %v", checks)
+	}
 	if len(warnings) != 1 || !strings.HasPrefix(warnings[0], "Claude:") {
 		t.Fatalf("неверное предупреждение: %v", warnings)
+	}
+}
+
+func TestStateSnapshot(t *testing.T) {
+	m, _ := NewManager(testPaths(t), nil)
+	t.Cleanup(func() { _ = m.log.Close() })
+	m.update(func(s *State) { s.Proxy.Servers = []Server{{Name: "original"}} })
+	snapshot := m.State()
+	snapshot.Proxy.Servers[0].Name = "changed"
+	if m.State().Proxy.Servers[0].Name != "original" {
+		t.Fatal("снимок изменил состояние менеджера")
 	}
 }
 

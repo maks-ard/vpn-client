@@ -16,16 +16,25 @@ var serviceProbes = []struct{ name, url string }{
 	{"Claude", "https://claude.ai/"},
 }
 
+type ServiceCheck struct {
+	Name      string    `json:"name"`
+	OK        bool      `json:"ok"`
+	Delay     int       `json:"delay"`
+	CheckedAt time.Time `json:"checkedAt"`
+}
+
 // Каждый сервис проверяется отдельно: успех YouTube не означает доступность остальных.
 func (m *Manager) checkServices(ctx context.Context, api *clash) {
 	var workers sync.WaitGroup
-	for _, probe := range serviceProbes {
+	checks := make([]ServiceCheck, len(serviceProbes))
+	for i, probe := range serviceProbes {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
-			_, err := api.delayURL(probeCtx, singbox.TagProxy, probe.url)
+			delay, err := api.delayURL(probeCtx, singbox.TagProxy, probe.url)
+			checks[i] = ServiceCheck{Name: probe.name, OK: err == nil, Delay: delay, CheckedAt: time.Now()}
 			if ctx.Err() != nil {
 				return
 			}
@@ -33,6 +42,9 @@ func (m *Manager) checkServices(ctx context.Context, api *clash) {
 		}()
 	}
 	workers.Wait()
+	if ctx.Err() == nil {
+		m.update(func(s *State) { s.Proxy.Checks = checks })
+	}
 }
 
 const corpAuthFailed = "сервер OpenVPN отклонил авторизацию; проверьте учётные данные и параллельные подключения"

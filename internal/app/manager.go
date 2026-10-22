@@ -55,9 +55,10 @@ type ProxyState struct {
 	// Selected — выбор пользователя: "auto" или имя сервера.
 	Selected string `json:"selected"`
 	// Current — сервер, через который реально идёт трафик.
-	Current string   `json:"current"`
-	Delay   int      `json:"delay"` // мс, 0 — неизвестно
-	Servers []Server `json:"servers"`
+	Current string         `json:"current"`
+	Delay   int            `json:"delay"` // мс, 0 — неизвестно
+	Servers []Server       `json:"servers"`
+	Checks  []ServiceCheck `json:"checks,omitempty"`
 
 	Title    string    `json:"title,omitempty"`
 	Used     int64     `json:"used,omitempty"`
@@ -196,7 +197,16 @@ func (m *Manager) reconnectIfActive(reason string) {
 func (m *Manager) State() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.state
+	return cloneState(m.state)
+}
+
+// Снимки передаются HTTP и окну после снятия блокировки: срезы не должны
+// разделять память с обновляемым состоянием менеджера.
+func cloneState(s State) State {
+	s.Warnings = append([]string(nil), s.Warnings...)
+	s.Proxy.Servers = append([]Server(nil), s.Proxy.Servers...)
+	s.Proxy.Checks = append([]ServiceCheck(nil), s.Proxy.Checks...)
+	return s
 }
 
 func (m *Manager) Active() bool {
@@ -313,6 +323,7 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 	m.update(func(s *State) {
 		s.Corp.Up = false
 		s.Corp.Detail = "подключение…"
+		s.Proxy.Checks = nil
 		s.Error = ""
 	})
 	m.healthWarning("OpenVPN:", false, "")
@@ -524,27 +535,45 @@ func (m *Manager) refreshProxies(ctx context.Context, api *clash) {
 
 // SelectServer переключает сервер на лету; "auto" — самый быстрый.
 func (m *Manager) SelectServer(name string) error {
+	m.settingsMu.Lock()
+	defer m.settingsMu.Unlock()
 	m.mu.Lock()
-	m.settings.Server = name
-	if name == singbox.TagAuto {
-		m.settings.Server = ""
+	valid := name == singbox.TagAuto
+	for _, server := range m.state.Proxy.Servers {
+		valid = valid || server.Name == name
+	}
+	if !valid {
+		m.mu.Unlock()
+		return errors.New("сервер отсутствует в текущем списке")
 	}
 	settings := m.settings
+	previousServer := m.state.Proxy.Selected
+	settings.Server = name
+	if name == singbox.TagAuto {
+		settings.Server = ""
+	}
 	api := m.api
 	m.mu.Unlock()
-	if err := saveSettings(m.paths, settings); err != nil {
-		return err
-	}
-	m.update(func(s *State) { s.Proxy.Selected = name })
-	if api == nil {
-		return nil
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := api.selectProxy(ctx, singbox.TagProxy, name); err != nil {
+	if api != nil {
+		if err := api.selectProxy(ctx, singbox.TagProxy, name); err != nil {
+			return err
+		}
+	}
+	if err := saveSettings(m.paths, settings); err != nil {
+		if api != nil && previousServer != "" {
+			return errors.Join(err, api.selectProxy(ctx, singbox.TagProxy, previousServer))
+		}
 		return err
 	}
-	m.refreshProxies(ctx, api)
+	m.mu.Lock()
+	m.settings = settings
+	m.mu.Unlock()
+	m.update(func(s *State) { s.Proxy.Selected = name; s.Proxy.Checks = nil })
+	if api != nil {
+		m.refreshProxies(ctx, api)
+	}
 	return nil
 }
 
@@ -565,6 +594,7 @@ func (m *Manager) TestServers() {
 		_, _ = api.delay(ctx, singbox.TagProxy)
 	}
 	m.refreshProxies(ctx, api)
+	m.checkServices(ctx, api)
 }
 
 func (m *Manager) LogFile() string { return m.paths.LogFile() }
@@ -579,6 +609,7 @@ func (m *Manager) Logf(format string, a ...any) { m.log.Printf(format, a...) }
 
 func (m *Manager) update(fn func(*State)) {
 	m.mu.Lock()
+	m.state = cloneState(m.state)
 	fn(&m.state)
 	state := m.state
 	m.mu.Unlock()

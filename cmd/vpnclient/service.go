@@ -634,10 +634,14 @@ func (s *Service) refreshTray(st app.State) {
 	var parts []string
 	if st.Status == app.StatusConnected {
 		if st.Corp.Enabled {
-			parts = append(parts, "OpenVPN "+map[bool]string{true: "работает", false: "подключается"}[st.Corp.Up])
+			parts = append(parts, "OpenVPN "+map[bool]string{true: "доступен", false: "доступ не подтверждён"}[st.Corp.Up])
 		}
 		if st.Proxy.Enabled && st.Proxy.Current != "" {
-			parts = append(parts, "VLESS: "+st.Proxy.Current)
+			available := false
+			for _, check := range st.Proxy.Checks {
+				available = available || check.OK
+			}
+			parts = append(parts, "VLESS: "+map[bool]string{true: "есть доступ", false: "доступ не подтверждён"}[available])
 		}
 	}
 	tooltip := "vpn-client — " + strings.ToLower(status[:1]) + status[1:]

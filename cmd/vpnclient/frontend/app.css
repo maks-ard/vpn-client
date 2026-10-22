@@ -172,6 +172,10 @@ button.card:hover { border-color: var(--border-strong); background: #1A1D24; }
 
 /* Поля */
 .field-label { font-size: 13px; color: var(--muted); }
+.check-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.check-ok { color: var(--accent); }
+.check-bad { color: var(--amber); }
+.diagnostics { min-height: 180px; padding: 10px; resize: vertical; user-select: text; font-family: monospace; }
 .info-btn {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   width: 24px; height: 24px; padding: 3px; border: 0; border-radius: 50%;

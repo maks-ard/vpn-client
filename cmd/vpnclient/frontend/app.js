@@ -1,4 +1,5 @@
 import { Call, Events, Window, Clipboard } from "/wails/runtime.js";
+import { serverLabels, serverIcon } from "./servers.js";
 
 // Методы Go-сервиса main.Service (cmd/vpnclient/service.go).
 const svc = (method, ...args) => Call.ByName("main.Service." + method, ...args);
@@ -10,6 +11,15 @@ let state = null;
 let settings = null;
 let ovpn = null;
 let version = "";
+let draft = null;
+let savedSettings = null;
+let previousSettings = null;
+let updateRefresh = 0;
+
+function friendlyServer(name) {
+  if (!name || name === "auto") return "авто";
+  return serverLabels(state?.proxy.servers || []).find(s => s.name === name)?.label || "Сервер";
+}
 
 // ---------- форматирование ----------
 
@@ -121,12 +131,15 @@ function renderMain() {
     $("proxy-sub").textContent = "Не настроено · добавьте подписку";
     setBadge($("proxy-badge"), null, "");
   } else {
-    const chosen = px.selected === "auto" || !px.selected ? "авто" : px.selected;
-    let text = "VLESS · " + (st === "connected" && px.current ? px.current : chosen);
+    const chosen = friendlyServer(px.selected);
+    let text = "VLESS · " + (st === "connected" && px.current ? friendlyServer(px.current) : chosen);
     if (st === "connected" && px.delay > 0) text += ` · ${px.delay} мс`;
     if (st === "connected" && px.selected === "auto" && px.servers && px.servers.length > 1) text += " · авто";
     $("proxy-sub").textContent = text;
-    if (st === "connected") setBadge($("proxy-badge"), "on", "вкл");
+    if (st === "connected") {
+      const checks = px.checks || [];
+      setBadge($("proxy-badge"), checks.length ? (checks.some(c => c.ok) ? "on" : "bad") : "wait", checks.length ? (checks.some(c => c.ok) ? "доступен" : "нет связи") : "проверка");
+    }
     else if (st === "connecting") setBadge($("proxy-badge"), "wait", "ждём");
     else setBadge($("proxy-badge"), "", "выкл");
   }
@@ -137,6 +150,27 @@ function renderMain() {
 
   if (!$("sheet").hidden) renderServers();
   renderLinkInfo();
+  renderChecks();
+}
+
+function renderChecks() {
+  const list = $("service-checks");
+  list.replaceChildren();
+  const checks = state?.proxy.checks || [];
+  $("checks-block").hidden = !state?.proxy.enabled;
+  $("btn-check-now").disabled = state?.status !== "connected";
+  for (const check of checks) {
+    const row = document.createElement("div");
+    row.className = "check-row";
+    const name = document.createElement("span"); name.textContent = check.name;
+    const result = document.createElement("span");
+    result.className = check.ok ? "check-ok" : "check-bad";
+    result.textContent = check.ok ? `${check.delay} мс` : "Нет ответа";
+    row.append(name, result); list.append(row);
+  }
+  $("checks-time").textContent = checks.length
+    ? "Проверено " + new Date(checks[0].checkedAt).toLocaleTimeString("ru-RU")
+    : "Ещё не проверено";
 }
 
 setInterval(() => {
@@ -167,22 +201,26 @@ function renderServers() {
   const list = $("server-list");
   list.replaceChildren();
   const px = state.proxy;
-  const items = [{ name: "auto", label: "Авто — самый быстрый", delay: px.selected === "auto" ? px.delay : 0 }]
-    .concat((px.servers || []).map((s) => ({ name: s.name, label: s.name, delay: s.delay })));
+  const items = [{ name: "auto", label: "Автовыбор", delay: px.selected === "auto" ? px.delay : 0, code: "" }]
+    .concat(serverLabels(px.servers || []));
   for (const item of items) {
     const btn = document.createElement("button");
     btn.className = "server" + (px.selected === item.name ? " selected" : "");
     const name = document.createElement("span");
     name.className = "server-name";
     name.textContent = item.label;
+    btn.title = item.name === "auto" ? "Самый быстрый по HTTP-проверке YouTube" : item.name;
+    btn.setAttribute("aria-pressed", String(px.selected === item.name));
     const ping = document.createElement("span");
     ping.className = "server-ping" + (item.delay > 0 ? (item.delay < 150 ? " good" : item.delay > 400 ? " slow" : "") : "");
     ping.textContent = item.delay > 0 ? `${item.delay} мс` : "—";
-    btn.append(name, ping);
-    btn.addEventListener("click", () => {
+    btn.append(serverIcon(item.code), name, ping);
+    btn.addEventListener("click", async () => {
       // Сервер переключается сразу, подтверждать не нужно.
-      $("sheet").hidden = true;
-      svc("SelectServer", item.name).catch(showError);
+      btn.disabled = true;
+      try { await svc("SelectServer", item.name); $("sheet").hidden = true; }
+      catch (err) { showError(err); }
+      finally { btn.disabled = false; }
     });
     list.append(btn);
   }
@@ -201,7 +239,20 @@ $("btn-ping").addEventListener("click", async () => {
   btn.textContent = "Проверяем…";
   try { await svc("TestServers"); } catch (e) { showError(e); }
   btn.disabled = false;
-  btn.textContent = "Проверить пинг";
+  btn.textContent = "Проверить задержку";
+});
+
+$("btn-check-now").addEventListener("click", async () => {
+  const btn = $("btn-check-now"); btn.disabled = true; btn.textContent = "Проверяем…";
+  try { await svc("TestServers"); } catch (err) { showError(err); }
+  finally { btn.disabled = false; btn.textContent = "Проверить сейчас"; }
+});
+$("btn-setup-connect").addEventListener("click", () => {
+  if (draft) { $("btn-apply").focus(); showToast("Сначала примените настройки", "info"); return; }
+  if (!(settings?.link || "").trim() && !ovpn?.loaded) {
+    showToast("Добавьте файл OpenVPN или ссылку VLESS", "info"); return;
+  }
+  showPage("main");
 });
 
 // ---------- настройки ----------
@@ -216,7 +267,8 @@ function renderSettings() {
   $("version").textContent = version;
 
   const loaded = ovpn && ovpn.loaded;
-  $("ovpn-path-form").hidden = !!loaded;
+  $("setup-intro").hidden = !!loaded || !!(settings.link || "").trim();
+  $("ovpn-path-form").hidden = !!loaded && !replacingOVPN;
   $("ovpn-name").textContent = loaded ? ovpn.name : "Файл не выбран";
   $("ovpn-server").textContent = loaded ? (ovpn.error || ovpn.server) : "Загрузите .ovpn от администратора";
   $("btn-ovpn").textContent = loaded ? "Заменить" : "Выбрать";
@@ -260,19 +312,48 @@ function renderLinkInfo() {
 }
 
 async function save(patch) {
-  const next = { ...settings, ...patch };
+  if (!savedSettings) savedSettings = { ...settings };
+  draft = { ...(draft || settings), ...patch };
+  settings = draft;
+  $("settings-actions").hidden = false;
+  $("settings-impact").textContent = state?.status === "connected"
+    ? "Применение маршрутов и учётных данных переподключит VPN."
+    : "Изменения ещё не применены.";
+  renderSettings();
+}
+
+$("btn-apply").addEventListener("click", async () => {
+  if (!draft) return;
+  const btn = $("btn-apply"); btn.disabled = true;
   try {
-    await svc("SaveSettings", next);
-    settings = next;
+    await svc("SaveSettings", draft);
+    previousSettings = savedSettings;
+    draft = null; savedSettings = null;
+    $("settings-actions").hidden = true;
+    $("btn-settings-undo").hidden = false;
+    await reloadSettings();
+    showToast("Настройки применены", "info");
   } catch (e) {
     showError(e);
-  }
+  } finally { btn.disabled = false; }
+});
+$("btn-discard").addEventListener("click", async () => {
+  draft = null; savedSettings = null; $("settings-actions").hidden = true;
   await reloadSettings();
-}
+});
+$("btn-settings-undo").addEventListener("click", async () => {
+  if (!previousSettings) return;
+  try {
+    await svc("SaveSettings", previousSettings);
+    previousSettings = null; draft = null; savedSettings = null;
+    $("settings-actions").hidden = true; $("btn-settings-undo").hidden = true;
+    await reloadSettings();
+  } catch (err) { showError(err); }
+});
 
 async function reloadSettings() {
   const view = await svc("Settings");
-  settings = view.settings;
+  settings = draft || view.settings;
   ovpn = view.ovpn;
   version = view.version;
   renderSettings();
@@ -290,10 +371,16 @@ $("btn-paste").addEventListener("click", async () => {
   } catch (e) { showError(e); }
 });
 
+let replacingOVPN = false;
 $("btn-ovpn").addEventListener("click", async () => {
+  replacingOVPN = true;
+  renderSettings();
+  await findOVPN();
+});
+$("btn-ovpn-browse").addEventListener("click", async () => {
   try {
     const info = await svc("ChooseOVPN");
-    if (info) ovpn = info;
+    if (info) { ovpn = info; replacingOVPN = false; }
   } catch (e) { showError(e); }
   await reloadSettings();
 });
@@ -306,6 +393,7 @@ $("ovpn-path-form").addEventListener("submit", async (e) => {
   btn.textContent = "Загрузка…";
   try {
     ovpn = await svc("LoadOVPN", path);
+    replacingOVPN = false;
     $("ovpn-path").value = "";
     await reloadSettings();
     showToast("Конфигурация OpenVPN загружена", "info");
@@ -340,6 +428,7 @@ async function findOVPN() {
           button.disabled = true;
           try {
             await svc("LoadOVPN", profile.path);
+            replacingOVPN = false;
             await reloadSettings();
             $("ovpn-path").value = "";
             showToast("Конфигурация OpenVPN загружена", "info");
@@ -359,6 +448,29 @@ $("btn-ovpn-remove").addEventListener("click", async () => {
 });
 $("ovpn-user").addEventListener("change", () => save({ ovpnUsername: $("ovpn-user").value }));
 $("ovpn-pass").addEventListener("change", () => save({ ovpnPassword: $("ovpn-pass").value }));
+$("btn-password").addEventListener("click", () => {
+  const visible = $("ovpn-pass").type === "password";
+  $("ovpn-pass").type = visible ? "text" : "password";
+  $("btn-password").textContent = visible ? "Скрыть" : "Показать";
+  $("btn-password").setAttribute("aria-pressed", String(visible));
+});
+
+$("btn-diagnostics").addEventListener("click", () => {
+  // Только разрешённые поля: журнал, адреса, имена серверов и настройки с
+  // паролями не попадают в отчёт даже при нестандартном формате подписки.
+  const report = {
+    version: version.match(/Версия [\w.+-]+(?: · sing-box [\w.+-]+)?/)?.[0] || "неизвестно",
+    time: new Date().toISOString(),
+    service: state?.service || "доступна",
+    process: state?.status || "неизвестно",
+    corporate: { enabled: !!state?.corp.enabled, reachable: !!state?.corp.up },
+    proxy: { enabled: !!state?.proxy.enabled, serverCount: state?.proxy.servers?.length || 0, delay: state?.proxy.delay || 0 },
+    checks: (state?.proxy.checks || []).filter(c => ["YouTube", "Instagram", "ChatGPT", "Claude"].includes(c.name)).map(c => ({ name: c.name, ok: c.ok, delay: c.delay, checkedAt: c.checkedAt })),
+  };
+  $("diagnostics-preview").value = JSON.stringify(report, null, 2);
+  $("diagnostics-block").hidden = false;
+});
+$("btn-diagnostics-copy").addEventListener("click", () => copy($("diagnostics-preview").value));
 
 $("domain-form").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -376,7 +488,12 @@ $("btn-update").addEventListener("click", async () => {
   try {
     await svc("CheckUpdate");
     showToast("Проверяем обновления…", "info");
-    setTimeout(() => reloadSettings().catch(() => {}), 5000);
+    clearInterval(updateRefresh);
+    let polls = 0;
+    updateRefresh = setInterval(() => {
+      reloadSettings().catch(() => {});
+      if (++polls >= 30) clearInterval(updateRefresh);
+    }, 2000);
   } catch (e) { showError(e); }
 });
 
