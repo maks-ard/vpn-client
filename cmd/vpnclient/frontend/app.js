@@ -78,7 +78,7 @@ function renderMain() {
     title = "Установка…";
     sub = "Подтвердите запрос Windows на права администратора. Не видно запроса — нажмите на мигающий значок на панели задач.";
   } else if (state.service === "unavailable") {
-    title = state.error ? "Служба не отвечает" : "Подождите…";
+    title = !state.error ? "Подождите…" : state.error.startsWith("Служба остановлена") ? "Служба остановлена" : "Служба не отвечает";
     sub = state.error || "Подключаемся к службе VPN";
   }
   app.classList.toggle("connecting", st === "connecting" || state.service === "installing" || state.service === "unavailable");

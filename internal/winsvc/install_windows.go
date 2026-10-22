@@ -94,11 +94,8 @@ func Install() error {
 	if err := secureLogDir(LogDir()); err != nil {
 		return fmt.Errorf("права на %s: %w", LogDir(), err)
 	}
-	if err := s.Start(); err != nil {
-		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
-			return errors.New(AntivirusHint)
-		}
-		return fmt.Errorf("запуск службы: %w", err)
+	if err := startWithRetry(s); err != nil {
+		return err
 	}
 
 	_ = createShortcut(target)
@@ -142,6 +139,31 @@ func RestartService() error {
 		return err
 	}
 	return s.Start()
+}
+
+// startWithRetry запускает службу. Сразу после записи нового exe антивирус
+// может несколько секунд проверять его и отвечать на запуск «Отказано в
+// доступе» — тогда пробуем ещё раз.
+func startWithRetry(s *mgr.Service) error {
+	var err error
+	for attempt := 0; attempt < 8; attempt++ {
+		if attempt > 0 {
+			time.Sleep(3 * time.Second)
+		}
+		err = s.Start()
+		switch {
+		case err == nil, errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING):
+			return nil
+		case errors.Is(err, windows.ERROR_FILE_NOT_FOUND), errors.Is(err, windows.ERROR_PATH_NOT_FOUND):
+			return errors.New(AntivirusHint)
+		case errors.Is(err, windows.ERROR_ACCESS_DENIED):
+			continue
+		default:
+			return fmt.Errorf("запуск службы: %w", err)
+		}
+	}
+	return fmt.Errorf("запуск службы: %w. Вероятно, запуск блокирует антивирус: добавьте "+
+		"C:\\Program Files\\vpn-client в исключения и доверенные программы", err)
 }
 
 func stopAndWait(s *mgr.Service) error {

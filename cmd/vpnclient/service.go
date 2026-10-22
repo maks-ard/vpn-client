@@ -324,7 +324,7 @@ func (s *Service) supervise() {
 		cancel()
 
 		if err != nil {
-			installed, _ := winsvc.ServiceRunning()
+			installed, running := winsvc.ServiceRunning()
 			if !installed {
 				// Первый раз ставим сами, дальше — по кнопке в окне.
 				if triedInstall {
@@ -341,13 +341,19 @@ func (s *Service) supervise() {
 				unavailableSince = time.Now()
 			}
 			msg := ""
-			if time.Since(unavailableSince) > 20*time.Second {
+			waited := time.Since(unavailableSince)
+			switch {
+			case !running && waited > 5*time.Second:
+				msg = "Служба остановлена. Нажмите кнопку, чтобы запустить её (понадобятся права администратора)."
+			case waited > 20*time.Second:
 				msg = "Служба запущена, но не отвечает. Нажмите кнопку, чтобы перезапустить её (понадобятся права администратора)."
+			}
+			if msg != "" {
 				if _, statErr := os.Stat(winsvc.InstalledExe()); statErr != nil {
 					// Служба зарегистрирована, а её exe нет — его удалил антивирус.
 					msg = winsvc.AntivirusHint
 				}
-				s.log.Error("служба не отвечает", "err", err)
+				s.log.Error("служба недоступна", "running", running, "err", err)
 			}
 			s.setServiceStatus("unavailable", msg)
 			select {
