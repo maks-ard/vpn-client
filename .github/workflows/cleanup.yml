@@ -1,0 +1,51 @@
+name: Cleanup
+
+# Одноразовая очистка после переписывания истории: удаляет старые релизы,
+# переносит теги на новые коммиты, удаляет лишнюю ветку и старые запуски.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: удалить релизы v0.1.0–v0.2.5 вместе с тегами
+        run: |
+          for v in v0.1.0 v0.1.1 v0.1.2 v0.1.3 v0.2.0 v0.2.1 v0.2.2 v0.2.3 v0.2.4 v0.2.5; do
+            gh release delete "$v" --cleanup-tag -y || echo "релиза $v нет"
+            git push origin --delete "refs/tags/$v" 2>/dev/null || true
+          done
+
+      - name: перенести теги на переписанные коммиты
+        # Пуш с GITHUB_TOKEN не запускает release.yml, релизы заново не соберутся.
+        run: |
+          git tag -f v0.2.6 b3cb95896dd32f7819bd12b0abe34c6ce427f950
+          git tag -f v0.3.0 fb1378b152fcd67d9e1f891756abd0108d54e3c1
+          git tag -f v0.3.1 ee7699d05ffce78e1df0d43a16b5a1d6957c2fea
+          git tag -f v0.3.2 683cff9625611cca2625ab83dd36cead8c18fd1d
+          git push --force origin v0.2.6 v0.3.0 v0.3.1 v0.3.2
+
+      - name: удалить ветку claude/upbeat-shannon-2280x7
+        run: git push origin --delete claude/upbeat-shannon-2280x7 || echo "ветки нет"
+
+      - name: удалить старые запуски Actions
+        run: |
+          gh run list -L 1000 --json databaseId -q '.[].databaseId' | while read -r id; do
+            [ "$id" = "$GITHUB_RUN_ID" ] || gh run delete "$id" || true
+          done
+
+      - name: итог
+        run: |
+          git ls-remote origin
+          gh release list
