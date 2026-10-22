@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 
+	"github.com/go-ole/go-ole"
+	"github.com/go-ole/go-ole/oleutil"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -97,8 +98,6 @@ func Install() error {
 		return fmt.Errorf("запуск службы: %w", err)
 	}
 
-	// Версии 0.1.x запускали окно с правами администратора через планировщик.
-	_ = runWithTimeout(hidden("schtasks.exe", "/Delete", "/F", "/TN", Name), 20*time.Second)
 	_ = createShortcut(target)
 	return nil
 }
@@ -256,35 +255,45 @@ func shortcutPath() string {
 	return filepath.Join(pd, `Microsoft\Windows\Start Menu\Programs`, "vpn-client.lnk")
 }
 
-// createShortcut кладёт ярлык в меню «Пуск» для всех пользователей.
+// createShortcut кладёт ярлык в меню «Пуск» для всех пользователей через
+// COM-объект WScript.Shell напрямую — без запуска PowerShell (скрытый
+// PowerShell антивирусы справедливо считают признаком вредоноса).
 func createShortcut(target string) error {
-	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
-	script := fmt.Sprintf(
-		"$s=(New-Object -ComObject WScript.Shell).CreateShortcut(%s);$s.TargetPath=%s;$s.WorkingDirectory=%s;$s.Description='vpn-client';$s.Save()",
-		q(shortcutPath()), q(target), q(filepath.Dir(target)))
-	return runWithTimeout(hidden("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script), 30*time.Second)
-}
-
-// runWithTimeout не даёт вспомогательной программе подвесить установку.
-func runWithTimeout(cmd *exec.Cmd, d time.Duration) error {
-	if err := cmd.Start(); err != nil {
+	// COM требует, чтобы горутина не переезжала между потоками.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
 		return err
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(d):
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("%s не завершился за %s", filepath.Base(cmd.Path), d)
-	}
-}
+	defer ole.CoUninitialize()
 
-func hidden(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
-	return cmd
+	unknown, err := oleutil.CreateObject("WScript.Shell")
+	if err != nil {
+		return err
+	}
+	defer unknown.Release()
+	shell, err := unknown.QueryInterface(ole.IID_IDispatch)
+	if err != nil {
+		return err
+	}
+	defer shell.Release()
+	res, err := oleutil.CallMethod(shell, "CreateShortcut", shortcutPath())
+	if err != nil {
+		return err
+	}
+	link := res.ToIDispatch()
+	defer link.Release()
+	for name, value := range map[string]string{
+		"TargetPath":       target,
+		"WorkingDirectory": filepath.Dir(target),
+		"Description":      "vpn-client",
+	} {
+		if _, err := oleutil.PutProperty(link, name, value); err != nil {
+			return err
+		}
+	}
+	_, err = oleutil.CallMethod(link, "Save")
+	return err
 }
 
 // ErrCancelled — пользователь отказался в окне UAC.
