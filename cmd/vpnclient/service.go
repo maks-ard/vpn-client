@@ -189,6 +189,16 @@ func (s *Service) ChooseOVPN() (*app.OVPNInfo, error) {
 	if err != nil || path == "" {
 		return nil, err
 	}
+	return s.LoadOVPN(path)
+}
+
+// LoadOVPN читает файл с правами пользователя, как и диалог выбора.
+// Службе передаётся содержимое, а не путь к произвольному файлу SYSTEM.
+func (s *Service) LoadOVPN(path string) (*app.OVPNInfo, error) {
+	path = strings.Trim(strings.TrimSpace(path), "\"")
+	if path == "" {
+		return nil, errors.New("укажите путь к файлу .ovpn или .conf")
+	}
 	name, data, err := app.PrepareOVPN(path)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось загрузить .ovpn: %w", err)

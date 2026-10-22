@@ -35,6 +35,16 @@ func TestSettingsNormalize(t *testing.T) {
 	}
 }
 
+func TestDefaultSettingsNoCorporateDomains(t *testing.T) {
+	s, err := loadSettings(testPaths(t))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(s.CorpDomains) != 0 {
+		t.Fatalf("в новой установке не должно быть корпоративных доменов: %v", s.CorpDomains)
+	}
+}
+
 func TestImportOVPNInlinesFiles(t *testing.T) {
 	src := t.TempDir()
 	ca, _ := os.ReadFile("../singbox/testdata/corp.ovpn")

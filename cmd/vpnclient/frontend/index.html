@@ -120,6 +120,14 @@
           </div>
           <button class="btn" id="btn-ovpn">Выбрать</button>
         </div>
+        <form class="stack-sm" id="ovpn-path-form">
+          <label class="field-label" for="ovpn-path">Путь к файлу OpenVPN</label>
+          <div class="row">
+            <input class="input" id="ovpn-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\VPN\profile.ovpn">
+            <button class="btn" id="btn-ovpn-load" type="submit">Загрузить</button>
+          </div>
+          <div class="hint">Введите путь или выберите файл кнопкой выше. Сохраняется копия конфигурации.</div>
+        </form>
         <div class="hint ok" id="ovpn-cert" hidden>
           <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>
           Вход по сертификату из файла, пароль не нужен

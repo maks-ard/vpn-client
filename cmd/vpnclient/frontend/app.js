@@ -145,7 +145,15 @@ setInterval(() => {
   }
 }, 1000);
 
-$("power").addEventListener("click", () => svc("Toggle").catch(showError));
+$("power").addEventListener("click", () => {
+  if (settings && !(settings.link || "").trim() && !(ovpn && ovpn.loaded) && !(state && state.service)) {
+    showPage("settings");
+    $("link").focus();
+    showToast("Добавьте подписку или файл OpenVPN", "info");
+    return;
+  }
+  svc("Toggle").catch(showError);
+});
 
 $("route-corp").addEventListener("click", () => showPage("settings"));
 $("route-proxy").addEventListener("click", () => {
@@ -288,6 +296,21 @@ $("btn-ovpn").addEventListener("click", async () => {
   } catch (e) { showError(e); }
   await reloadSettings();
 });
+$("ovpn-path-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const path = $("ovpn-path").value.trim();
+  if (!path) { $("ovpn-path").focus(); return; }
+  const btn = $("btn-ovpn-load");
+  btn.disabled = true;
+  btn.textContent = "Загрузка…";
+  try {
+    ovpn = await svc("LoadOVPN", path);
+    $("ovpn-path").value = "";
+    await reloadSettings();
+    showToast("Конфигурация OpenVPN загружена", "info");
+  } catch (err) { showError(err); }
+  finally { btn.disabled = false; btn.textContent = "Загрузить"; }
+});
 $("btn-ovpn-remove").addEventListener("click", async () => {
   try { await svc("RemoveOVPN"); } catch (e) { showError(e); }
   await reloadSettings();
@@ -379,6 +402,9 @@ Events.On("settings-changed", () => reloadSettings().catch(showError));
   try {
     state = await svc("State");
     await reloadSettings();
+    if (!(settings.link || "").trim() && !(ovpn && ovpn.loaded)) {
+      showPage("settings");
+    }
   } catch (e) {
     showError(e);
   }

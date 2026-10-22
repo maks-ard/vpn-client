@@ -43,7 +43,6 @@ type OVPNInfo struct {
 
 func defaultSettings() Settings {
 	return Settings{
-		CorpDomains:  []string{"corp.example.com"},
 		RussiaDirect: true,
 		CloseToTray:  true,
 	}
