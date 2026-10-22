@@ -57,13 +57,15 @@ internal/vless/      парсер ссылок vless://
 internal/singbox/    сборка JSON-конфига sing-box
 internal/runner/     запуск/остановка sing-box, распаковка встроенного; *_windows.go / *_other.go
 internal/singboxbin/ sing-box.exe, встроенный в релизную сборку (тег embed_singbox)
-winres/winres.json   иконка, манифест (requireAdministrator) и версия exe для go-winres
+winres/winres.json   иконка, манифест (asInvoker: окно без прав) и версия exe для go-winres
 profiles/example.yaml  пример профиля для vpnctl
 .github/workflows/   ci.yml (каждый push и PR), release.yml (теги v*)
 ```
 
 Архитектура: окно (без прав) ⇄ ipc ⇄ служба (SYSTEM) → app.Manager → sing-box.
-Окно не читает файлы службы напрямую — всё через API, даже журнал.
+Окно не читает файлы службы напрямую — всё через API. Исключение — журнал службы в
+`%ProgramData%\vpn-client\logs` (читается всеми, ссылка на подписку в нём скрыта):
+его окно открывает напрямую, когда служба не отвечает.
 
 Зависимости направлены строго вниз: `cmd` → `winsvc`/`ipc` → `app` → `singbox` →
 `profile`/`subscription`/`ovpn`/`vless`; `runner` ни от чего внутреннего не зависит.
