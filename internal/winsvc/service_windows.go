@@ -105,6 +105,20 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status 
 	var m *app.Manager
 	srv := ipc.NewServer(h.info, func() { h.tryUpdate(ctx, m) })
 	m, _ = app.NewManager(paths, srv.Broadcast)
+	go func() {
+		defer recoverLog(m, "метаданные подписки")
+		m.RefreshSubscription(ctx)
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.RefreshSubscription(ctx)
+			}
+		}
+	}()
 	srv.SetManager(m)
 	m.Logf("служба запускается, версия %s", h.version)
 	if secErr != nil {

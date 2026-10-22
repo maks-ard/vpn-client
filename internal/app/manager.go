@@ -60,12 +60,13 @@ type ProxyState struct {
 	Servers []Server       `json:"servers"`
 	Checks  []ServiceCheck `json:"checks,omitempty"`
 
-	Title    string    `json:"title,omitempty"`
-	Used     int64     `json:"used,omitempty"`
-	Total    int64     `json:"total,omitempty"`
-	Expire   time.Time `json:"expire,omitempty"`
-	Updated  time.Time `json:"updated,omitempty"`
-	Outdated bool      `json:"outdated,omitempty"`
+	Title         string    `json:"title,omitempty"`
+	Used          int64     `json:"used,omitempty"`
+	Total         int64     `json:"total,omitempty"`
+	Expire        time.Time `json:"expire,omitempty"`
+	Updated       time.Time `json:"updated,omitempty"`
+	Outdated      bool      `json:"outdated,omitempty"`
+	MetadataError bool      `json:"metadataError,omitempty"`
 }
 
 type Server struct {
@@ -85,16 +86,17 @@ type Manager struct {
 	// singBoxPath — внешний sing-box вместо встроенного (для разработки).
 	singBoxPath string
 
-	mu          sync.Mutex
-	maintenance sync.Mutex
-	updating    bool
-	settingsMu  sync.Mutex
-	nextConnect time.Time
-	settings    Settings
-	state       State
-	cancel      context.CancelFunc
-	done        chan struct{}
-	api         *clash
+	mu             sync.Mutex
+	maintenance    sync.Mutex
+	updating       bool
+	settingsMu     sync.Mutex
+	subscriptionMu sync.Mutex
+	nextConnect    time.Time
+	settings       Settings
+	state          State
+	cancel         context.CancelFunc
+	done           chan struct{}
+	api            *clash
 }
 
 func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
@@ -106,6 +108,7 @@ func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
 	log.redact(s.Link)
 	m := &Manager{paths: paths, onChange: onChange, log: log, settings: s, singBoxPath: os.Getenv("VPNCLIENT_SINGBOX")}
 	m.state = m.idleState()
+	m.loadSubscriptionInfo()
 	return m, nil
 }
 
@@ -142,12 +145,26 @@ func (m *Manager) SaveSettings(s Settings) error {
 	m.log.redact(s.Link)
 	active := m.cancel != nil
 	if !active {
+		previous := m.state.Proxy
 		m.state = m.idleState()
+		if old.Link == s.Link {
+			m.state.Proxy = previous
+		}
+	}
+	if old.Link != s.Link {
+		m.state.Proxy.Expire = time.Time{}
+		m.state.Proxy.Updated = time.Time{}
+		m.state.Proxy.Title = ""
+		m.state.Proxy.Used, m.state.Proxy.Total = 0, 0
+		m.state.Proxy.Outdated, m.state.Proxy.MetadataError = false, false
 	}
 	state := m.state
 	m.mu.Unlock()
 	m.notify(state)
 
+	if old.Link != s.Link {
+		go m.RefreshSubscription(context.Background())
+	}
 	if active && routingChanged(old, s) {
 		m.log.Printf("настройки изменены, переподключение")
 		m.DisconnectWithReason("изменение настроек маршрутизации")
@@ -241,7 +258,11 @@ func (m *Manager) Connect() {
 	m.cancel = cancel
 	m.done = make(chan struct{})
 	settings := m.settings
+	metadata := m.state.Proxy
 	m.state = m.idleState()
+	m.state.Proxy.Title, m.state.Proxy.Used, m.state.Proxy.Total = metadata.Title, metadata.Used, metadata.Total
+	m.state.Proxy.Expire, m.state.Proxy.Updated = metadata.Expire, metadata.Updated
+	m.state.Proxy.Outdated, m.state.Proxy.MetadataError = metadata.Outdated, metadata.MetadataError
 	m.state.Status = StatusConnecting
 	state := m.state
 	done := m.done

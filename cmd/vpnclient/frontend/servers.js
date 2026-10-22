@@ -15,28 +15,52 @@ const countries = [
 ];
 
 export function serverLabels(servers) {
-  const counts = new Map();
   return servers.map((server, index) => {
     // UUID и адреса не используются как географические подсказки.
-    const source = server.name.replace(/\b[\w.-]+\.[a-z]{2,}\b|[a-f0-9]{8}-[a-f0-9-]{27,}|\b\d+(?:\.\d+){3}\b/gi, " ");
+    const source = server.name.replace(/\b[\w.-]+\.[a-z]{2,}\b|[a-f0-9]{8}-[a-f0-9-]{27,}|\b\d+(?:\.\d+){3}\b/gi, " ").replace(/_/g, " ");
     const matches = countries.filter(([, , pattern]) => pattern.test(source));
     const country = matches.length === 1 ? matches[0] : null;
     const base = country ? country[1] : "Сервер";
-    const n = (counts.get(base) || 0) + 1;
-    counts.set(base, n);
-    return { ...server, label: country ? `${base} · ${n}` : `Сервер ${index + 1}`, code: country?.[0] || "", index: index + 1 };
+    const cities = [[/amsterdam|амстердам/i, "Амстердам"], [/frankfurt|франкфурт/i, "Франкфурт"], [/berlin|берлин/i, "Берлин"], [/helsinki|хельсинки/i, "Хельсинки"], [/paris|париж/i, "Париж"], [/london|лондон/i, "Лондон"], [/stockholm|стокгольм/i, "Стокгольм"], [/tokyo|токио/i, "Токио"]];
+    const city = cities.find(([pattern]) => pattern.test(source))?.[1];
+    const cleaned = source.replace(/\b(vless|reality|xtls|tcp|udp|grpc|ws|tls|vision)\b/gi, "").replace(/[|¦]+/g, " · ").replace(/\s+/g, " ").trim();
+    const label = country ? `${base}${city ? " · " + city : ""}` : (cleaned || "Узел без названия");
+    return { ...server, label, code: country?.[0] || "", index: index + 1 };
+  }).map((server, index, all) => {
+    const duplicates = all.filter(s => s.label === server.label);
+    return duplicates.length > 1 ? { ...server, label: `${server.label} · ${duplicates.indexOf(server) + 1}` } : server;
   });
 }
+
+const stripes = {
+  NL: ["#ae1c28", "#fff", "#21468b"], DE: ["#111", "#d00", "#ffce00"],
+  FR: ["#0055a4", "#fff", "#ef4135"], TR: ["#e30a17"], JP: ["#fff"],
+  PL: ["#fff", "#dc143c"], FI: ["#fff"], SE: ["#006aa7"], CH: ["#d52b1e"],
+  US: ["#b22234", "#fff", "#b22234", "#fff", "#b22234", "#fff", "#b22234"],
+  GB: ["#012169"], SG: ["#ef3340", "#fff"],
+};
 
 // Локальная SVG-иконка, код страны не зависит от поддержки emoji в Windows.
 export function serverIcon(code = "") {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 32 32");
+  svg.setAttribute("viewBox", "0 0 32 24");
   svg.setAttribute("width", "32"); svg.setAttribute("height", "32");
   svg.setAttribute("aria-hidden", "true");
-  svg.innerHTML = code
-    ? '<rect x="1" y="1" width="30" height="30" rx="8" fill="var(--surface-2)" stroke="none"/><text x="16" y="20" text-anchor="middle" fill="currentColor" stroke="none" font-size="11" font-family="Segoe UI, sans-serif" font-weight="600"></text>'
-    : '<circle cx="16" cy="16" r="11"/><path d="M5 16h22M16 5c7 6 7 16 0 22M16 5c-7 6-7 16 0 22"/>';
-  if (code) svg.querySelector("text").textContent = code;
+  const colors = stripes[code];
+  if (!colors) {
+    svg.innerHTML = '<circle cx="16" cy="12" r="10"/><path d="M6 12h20M16 2c6 5 6 15 0 20M16 2c-6 5-6 15 0 20"/>';
+    return svg;
+  }
+  svg.style.stroke = "none";
+  svg.innerHTML = colors.map((fill, i) => code === "FR"
+    ? `<rect x="${i * 32 / colors.length}" y="2" width="${32 / colors.length + .1}" height="20" fill="${fill}"/>`
+    : `<rect x="0" y="${2 + i * 20 / colors.length}" width="32" height="${20 / colors.length + .1}" fill="${fill}"/>`).join("");
+  const cross = (color, width, x = 11) => `<path d="M${x} 2v20M0 12h32" stroke="${color}" stroke-width="${width}" stroke-linecap="butt"/>`;
+  if (code === "FI" || code === "SE") svg.innerHTML += cross(code === "FI" ? "#003580" : "#fecc00", 5);
+  if (code === "CH") svg.innerHTML += '<path d="M16 6v12M10 12h12" stroke="#fff" stroke-width="4" stroke-linecap="butt"/>';
+  if (code === "JP") svg.innerHTML += '<circle cx="16" cy="12" r="6" fill="#bc002d"/>';
+  if (code === "GB") svg.innerHTML += '<path d="M0 2l32 20M32 2L0 22" stroke="#fff" stroke-width="5"/><path d="M0 2l32 20M32 2L0 22" stroke="#c8102e" stroke-width="2"/>' + cross("#fff", 8, 16) + cross("#c8102e", 4, 16);
+  if (code === "US") svg.innerHTML += '<rect x="0" y="2" width="14" height="11" fill="#3c3b6e"/><path d="M3 5h1m3 0h1m3 0h1M3 8h1m3 0h1m3 0h1" stroke="#fff" stroke-width="1.5"/>';
+  if (code === "TR" || code === "SG") svg.innerHTML += `<circle cx="10" cy="${code === "SG" ? 7 : 12}" r="${code === "SG" ? 4 : 6}" fill="#fff"/><circle cx="12" cy="${code === "SG" ? 6 : 11}" r="${code === "SG" ? 3.4 : 5}" fill="${colors[0]}"/>`;
   return svg;
 }

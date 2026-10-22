@@ -208,7 +208,7 @@ func parseInfo(h http.Header) Info {
 		if err != nil {
 			continue
 		}
-		switch strings.ToLower(k) {
+		switch strings.ToLower(strings.TrimSpace(k)) {
 		case "upload":
 			info.Upload = n
 		case "download":
@@ -229,6 +229,16 @@ func parseInfo(h http.Header) Info {
 	}
 	info.Title = title
 	return info
+}
+
+// FetchInfo получает метаданные независимо от запуска туннеля. Ответ не
+// сохраняется: профиль может содержать ключи и другие секреты.
+func FetchInfo(ctx context.Context, link string) (Info, error) {
+	h, _, err := fetch(ctx, link, "")
+	if err != nil {
+		return Info{}, err
+	}
+	return parseInfo(h), nil
 }
 
 func save(path string, c cached) error {
