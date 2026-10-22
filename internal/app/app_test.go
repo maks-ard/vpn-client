@@ -21,7 +21,7 @@ func testPaths(t *testing.T) Paths {
 }
 
 func TestSettingsNormalize(t *testing.T) {
-	s := Settings{Link: "  https://sub.example.com/x ", Server: "NL", CorpDomains: []string{" *.corp.example.com. ", "corp.example.com", ""}}
+	s := Settings{Link: "  https://sub.example.com/x ", Server: "NL", CorpDomains: []string{" *.Corp.Example.COM. ", "corp.example.com", ""}}
 	if err := s.normalize(); err != nil {
 		t.Fatal(err)
 	}

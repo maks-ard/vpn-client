@@ -25,7 +25,7 @@ openvpn:
 # сервер, добавляются автоматически.
 corporate:
   domains:
-    - corp.example.com      # вместе со всеми поддоменами
+    - corp.example.com     # вместе со всеми поддоменами
   subnets: []              # например: [10.0.0.0/8]
 
 routing:
