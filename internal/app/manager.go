@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	mrand "math/rand/v2"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -831,7 +833,19 @@ func proxyStateFromInput(in *singbox.Input, settings Settings) ProxyState {
 	return p
 }
 
+// freeLocalAddr выбирает порт для Clash API ниже динамического диапазона
+// Windows (49152+): из него Hyper-V и WinNAT резервируют порты в любой момент,
+// и sing-box получал «bind: forbidden by its access permissions».
 func freeLocalAddr() (string, error) {
+	for range 50 {
+		port := 20000 + mrand.IntN(29000)
+		l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err == nil {
+			addr := l.Addr().String()
+			_ = l.Close()
+			return addr, nil
+		}
+	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", err
