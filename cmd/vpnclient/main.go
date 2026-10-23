@@ -58,7 +58,11 @@ func main() {
 	case slices.Contains(args, "--uninstall"):
 		exit(winsvc.Uninstall())
 	case slices.Contains(args, "--restart-service"):
-		exit(winsvc.RestartService())
+		holdJob := ""
+		if i := slices.Index(args, "--hold-job"); i >= 0 && i+1 < len(args) {
+			holdJob = args[i+1]
+		}
+		exit(winsvc.RestartService(holdJob))
 	}
 
 	// --wait-pid: перезапуск окна (после установки или обновления) — ждём,

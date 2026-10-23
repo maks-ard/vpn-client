@@ -135,6 +135,12 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status 
 	}()
 	srv.SetManager(m)
 	m.Logf("служба запускается, версия %s", h.version)
+	// Подхватываем sing-box до открытия канала для окна: перезапускающий
+	// процесс держит job, пока служба не ответит окну.
+	adopted, adoptErr := m.Adopt()
+	if adoptErr != nil {
+		m.Logf("обновление: не удалось подхватить работающий sing-box: %v", adoptErr)
+	}
 	if secErr != nil {
 		m.Logf("служба: права на %s: %v", DataRoot(), secErr)
 	}
@@ -175,7 +181,9 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status 
 		}
 	}()
 
-	if resume := consumeResumeFlag(paths); resume || m.Settings().ConnectOnStart {
+	// Передача не удалась — VPN был включён, подключаемся заново.
+	resume := consumeResumeFlag(paths) || adoptErr != nil
+	if (resume || m.Settings().ConnectOnStart) && !(adopted && adoptErr == nil) {
 		go func() {
 			defer recoverLog(m, "автоподключение")
 			connectWithRetry(ctx, m)
@@ -376,7 +384,7 @@ func (h *handler) applyPending(m *app.Manager) {
 		return
 	}
 	attempted, err := m.InstallWhileIdle(func() error {
-		return h.installUpdate(m, pending.release, pending.path)
+		return h.installUpdate(m, pending.release, pending.path, "")
 	})
 	if !attempted {
 		h.setStatus("Обновление " + pending.release.Version + " готово. Установится после отключения VPN")
@@ -400,16 +408,31 @@ func (h *handler) installNow(m *app.Manager) error {
 		return errors.New("обновление ещё не загружено")
 	}
 	resume := m.Active()
+	var job string
 	if resume {
-		if err := os.WriteFile(resumeFile(Paths()), nil, 0o600); err != nil {
-			return fmt.Errorf("обновление: %w", err)
+		// Новая версия подхватит работающий sing-box, и соединения не оборвутся.
+		var err error
+		if job, err = m.HandOff(); err == nil {
+			m.Logf("обновление: установка по кнопке, sing-box продолжит работать после перезапуска")
+			resume = false
+		} else {
+			m.Logf("обновление: передать sing-box не удалось (%v), VPN переподключится после перезапуска", err)
+			if err := os.WriteFile(resumeFile(Paths()), nil, 0o600); err != nil {
+				return fmt.Errorf("обновление: %w", err)
+			}
+			m.DisconnectWithReason("установка обновления")
 		}
-		m.Logf("обновление: установка по кнопке, VPN переподключится после перезапуска")
-		m.DisconnectWithReason("установка обновления")
 	}
 	attempted, err := m.InstallWhileIdle(func() error {
-		return h.installUpdate(m, pending.release, pending.path)
+		return h.installUpdate(m, pending.release, pending.path, job)
 	})
+	if job != "" && (!attempted || err != nil) {
+		// Перезапуска не будет: возвращаем sing-box этой же службе.
+		if _, adoptErr := m.Adopt(); adoptErr != nil {
+			m.Logf("обновление: не удалось вернуть sing-box: %v", adoptErr)
+			m.Connect()
+		}
+	}
 	if !attempted || err != nil {
 		if resume {
 			_ = os.Remove(resumeFile(Paths()))
@@ -429,7 +452,9 @@ func (h *handler) installNow(m *app.Manager) error {
 	return nil
 }
 
-func (h *handler) installUpdate(m *app.Manager, rel *update.Release, path string) error {
+// job — переданный sing-box: перезапускающий процесс держит его, пока
+// новая версия службы не подхватит процесс.
+func (h *handler) installUpdate(m *app.Manager, rel *update.Release, path, job string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		h.setStatus("Ошибка определения установленного exe")
@@ -444,7 +469,11 @@ func (h *handler) installUpdate(m *app.Manager, rel *update.Release, path string
 	h.setStatus("Перезапуск после обновления до " + rel.Version)
 	h.setUpdate("installing", rel.Version, 100)
 	m.Logf("обновление: установлена %s, перезапуск службы", rel.Version)
-	if err := startDetached(exe, "--restart-service"); err != nil {
+	args := []string{"--restart-service"}
+	if job != "" {
+		args = append(args, "--hold-job", job)
+	}
+	if err := startDetached(exe, args...); err != nil {
 		h.setStatus("Обновление записано, но перезапуск службы не запущен")
 		m.Logf("обновление: перезапуск службы: %v", err)
 		return fmt.Errorf("перезапуск службы: %w", err)

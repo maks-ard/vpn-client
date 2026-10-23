@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"github.com/maks-ard/vpn-client/internal/ipc"
+	"github.com/maks-ard/vpn-client/internal/runner"
 	"github.com/maks-ard/vpn-client/internal/update"
 )
 
@@ -220,7 +221,16 @@ func Uninstall() error {
 }
 
 // RestartService останавливает и снова запускает службу (после обновления).
-func RestartService() error {
+// holdJob — job sing-box, оставленного старой версией: держим его открытым,
+// пока новая версия не запустится и не подхватит процесс. Если запуск не
+// удался, с выходом этого процесса Windows завершит sing-box.
+func RestartService(holdJob string) error {
+	if holdJob != "" {
+		// Без job новая служба просто подключится заново.
+		if release, err := runner.HoldJob(holdJob); err == nil {
+			defer release()
+		}
+	}
 	m, err := mgr.Connect()
 	if err != nil {
 		return err

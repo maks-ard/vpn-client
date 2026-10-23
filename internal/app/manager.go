@@ -101,6 +101,10 @@ type Manager struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
 	api         *clash
+	// handedOff — sing-box отдан новой версии службы: новое подключение
+	// создало бы второй TUN рядом с работающим.
+	handedOff bool
+	handoffCh chan chan handoffReply
 }
 
 func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
@@ -110,7 +114,8 @@ func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
 		log.Printf("%v", err)
 	}
 	log.redact(s.Link)
-	m := &Manager{paths: paths, onChange: onChange, log: log, settings: s, singBoxPath: os.Getenv("VPNCLIENT_SINGBOX")}
+	m := &Manager{paths: paths, onChange: onChange, log: log, settings: s, singBoxPath: os.Getenv("VPNCLIENT_SINGBOX"),
+		handoffCh: make(chan chan handoffReply)}
 	m.state = m.idleState()
 	m.loadSubscriptionInfo()
 	return m, nil
@@ -254,7 +259,7 @@ func (m *Manager) Connect() {
 		return
 	}
 	m.mu.Lock()
-	if m.cancel != nil {
+	if m.cancel != nil || m.handedOff {
 		m.mu.Unlock()
 		return
 	}
@@ -273,7 +278,7 @@ func (m *Manager) Connect() {
 	done := m.done
 	m.mu.Unlock()
 	m.notify(state)
-	go m.run(ctx, settings, done)
+	go m.run(ctx, settings, done, nil)
 }
 
 // WhileIdle не даёт начать подключение посреди замены exe и запуска перезапуска.
@@ -321,9 +326,17 @@ func (m *Manager) DisconnectWithReason(reason string) {
 	<-done
 }
 
-func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}) {
+// run ведёт подключение до отключения; adopted — sing-box, подхваченный
+// у прошлой версии службы, вместо запуска своего.
+func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}, adopted *liveSession) {
 	defer close(done)
-	err := m.session(ctx, settings)
+	var err error
+	if adopted != nil {
+		err = m.supervise(ctx, adopted)
+		adopted.release()
+	} else {
+		err = m.session(ctx, settings)
+	}
 	// Повторяем, только если связь уже была установлена и оборвалась.
 	// Ошибки профиля и запуска так не лечатся и сразу показываются пользователю.
 	for attempt := 1; ctx.Err() == nil && (errors.Is(err, errProcessExited) || errors.Is(err, errCorpTerminated)); attempt++ {
@@ -338,6 +351,16 @@ func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}
 			break
 		}
 		err = m.session(ctx, settings)
+	}
+
+	if errors.Is(err, errHandedOff) {
+		// Состояние не сбрасываем: VPN продолжает работать в новой версии службы.
+		m.mu.Lock()
+		m.cancel = nil
+		m.api = nil
+		m.mu.Unlock()
+		m.log.Printf("sing-box передан новой версии службы")
+		return
 	}
 
 	m.mu.Lock()
@@ -418,71 +441,121 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 		s.Proxy = proxyStateFromInput(in, settings)
 	})
 
-	runCtx, stopRun := context.WithCancel(ctx)
-	defer stopRun()
-	exited := make(chan struct{})
 	output := newSessionOutput(m)
-	var runErr error
-	go func() {
-		defer close(exited)
-		runErr = runner.Run(runCtx, runner.Options{Exe: exe, Config: config, DataDir: m.paths.Data, Output: output})
-	}()
-
-	if err := api.waitReady(ctx, 20*time.Second, exited); err != nil {
-		stopRun()
-		<-exited
+	proc, err := runner.Start(runner.Options{Exe: exe, Config: config, DataDir: m.paths.Data, Output: output})
+	if err != nil {
+		return err
+	}
+	if err := api.waitReady(ctx, 20*time.Second, proc.Done()); err != nil {
+		exited := false
+		select {
+		case <-proc.Done():
+			exited = true
+		default:
+		}
+		proc.Stop()
 		if ctx.Err() != nil {
 			return nil
 		}
-		if runErr != nil {
-			return fmt.Errorf("%w%s", runErr, m.log.tailHint())
+		if exited {
+			return fmt.Errorf("%w%s", proc.Err(), m.log.tailHint())
 		}
 		return fmt.Errorf("%w%s", err, m.log.tailHint())
 	}
+	return m.supervise(ctx, &liveSession{proc: proc, api: api, output: output, info: sessionInfo{
+		APIAddr: in.API.Addr, APISecret: in.API.Secret, Servers: len(in.Servers), Corp: in.OpenVPN != nil,
+		CorpDomains: in.Profile.Corporate.Domains, LogLevel: in.Profile.SingBox.LogLevel,
+	}})
+}
 
+// sessionInfo — что нужно для наблюдения за работающим sing-box; передаётся
+// новой версии службы вместе с процессом.
+type sessionInfo struct {
+	APIAddr     string   `json:"apiAddr"`
+	APISecret   string   `json:"apiSecret"`
+	Servers     int      `json:"servers"`
+	Corp        bool     `json:"corp"`
+	CorpDomains []string `json:"corpDomains,omitempty"`
+	LogLevel    string   `json:"logLevel"`
+}
+
+// liveSession — sing-box, который уже поднял API.
+type liveSession struct {
+	proc    *runner.Process
+	api     *clash
+	output  *sessionOutput
+	info    sessionInfo
+	adopted bool
+	// unlock отпускает файл sing-box подхваченного процесса.
+	unlock func()
+}
+
+func (s *liveSession) release() {
+	if s.unlock != nil {
+		s.unlock()
+	}
+}
+
+// supervise следит за работающим sing-box, пока его не остановят, он не
+// завершится сам или не будет передан новой версии службы.
+func (m *Manager) supervise(ctx context.Context, live *liveSession) error {
 	m.mu.Lock()
-	m.api = api
+	m.api = live.api
 	m.mu.Unlock()
-	m.update(func(s *State) {
-		s.Status = StatusConnected
-		s.ConnectedAt = time.Now()
-	})
-	m.log.Printf("подключено")
+	if !live.adopted {
+		m.update(func(s *State) {
+			s.Status = StatusConnected
+			s.ConnectedAt = time.Now()
+		})
+		m.log.Printf("подключено")
+	}
 
 	monitorCtx, stopMonitor := context.WithCancel(ctx)
-	monitored := make(chan struct{})
+	var monitored sync.WaitGroup
+	monitored.Add(1)
 	go func() {
-		defer close(monitored)
-		m.monitor(monitorCtx, api, in)
+		defer monitored.Done()
+		m.monitor(monitorCtx, live.api, live.info)
 	}()
+	if live.adopted {
+		// stdout подхваченного процесса остался у прошлой версии службы.
+		monitored.Add(1)
+		go func() {
+			defer monitored.Done()
+			m.streamLogs(monitorCtx, live.api, live.info.LogLevel, live.output)
+		}()
+	}
 	defer func() {
 		stopMonitor()
-		<-monitored
+		monitored.Wait()
 	}()
 
-	corpDown := output.corpDown
+	corpDown := live.output.corpDown
 	for {
 		select {
 		case <-ctx.Done():
-			stopRun()
-			<-exited
+			live.proc.Stop()
 			return nil
-		case <-exited:
-			if runErr == nil {
-				runErr = errors.New("sing-box неожиданно завершился")
+		case <-live.proc.Done():
+			return fmt.Errorf("%w: %v%s", errProcessExited, live.proc.Err(), m.log.tailHint())
+		case reply := <-m.handoffCh:
+			h, err := live.proc.Handoff()
+			if err != nil {
+				reply <- handoffReply{err: err}
+				continue
 			}
-			return fmt.Errorf("%w: %v%s", errProcessExited, runErr, m.log.tailHint())
+			reply <- handoffReply{handoff: Handoff{Process: h, Session: live.info, State: m.State()}}
+			return errHandedOff
 		case <-corpDown:
 			// sing-box не поднимает завершившийся endpoint OpenVPN сам, поэтому
 			// перезапускаем сессию целиком; VLESS прерывается на несколько секунд.
-			_, auth := output.corpTerminated()
+			_, auth := live.output.corpTerminated()
 			if !m.allowCorpRetry() {
 				m.Logf("OpenVPN: %d перезапуска подряд не помогли, повторы остановлены до следующего подключения", maxCorpRetries)
 				corpDown = nil
 				continue
 			}
-			stopRun()
-			<-exited
+			live.proc.Stop()
 			if auth {
 				return fmt.Errorf("%w: сервер отклонил авторизацию", errCorpTerminated)
 			}
@@ -494,6 +567,7 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 var (
 	errProcessExited  = errors.New("процесс sing-box неожиданно завершился")
 	errCorpTerminated = errors.New("OpenVPN отключился")
+	errHandedOff      = errors.New("sing-box передан новой версии службы")
 )
 
 const (
@@ -526,7 +600,7 @@ func (m *Manager) singBox() (string, func(), error) {
 }
 
 // monitor обновляет скорость, пинг и состояние OpenVPN, пока VPN подключён.
-func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
+func (m *Manager) monitor(ctx context.Context, api *clash, info sessionInfo) {
 	var workers sync.WaitGroup
 	defer workers.Wait()
 	workers.Add(1)
@@ -540,8 +614,8 @@ func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
 		}
 	}()
 
-	multi := len(in.Servers) > 1
-	if len(in.Servers) > 0 {
+	multi := info.Servers > 1
+	if info.Servers > 0 {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
@@ -576,8 +650,8 @@ func (m *Manager) monitor(ctx context.Context, api *clash, in *singbox.Input) {
 		}()
 	}
 
-	if in.OpenVPN != nil {
-		domains := in.Profile.Corporate.Domains
+	if info.Corp {
+		domains := info.CorpDomains
 		// Первые секунды туннель ещё поднимается: таймауты DNS — не ошибка.
 		lastUp, everUp := time.Now(), false
 		for ctx.Err() == nil {

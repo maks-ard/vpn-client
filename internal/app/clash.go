@@ -167,6 +167,37 @@ func (c *clash) traffic(ctx context.Context, fn func(traffic)) error {
 	return sc.Err()
 }
 
+type clashLog struct {
+	Type    string `json:"type"`
+	Payload string `json:"payload"`
+}
+
+// logs читает поток /logs (по JSON-строке на запись журнала) до отмены ctx.
+func (c *clash) logs(ctx context.Context, level string, fn func(clashLog)) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/logs?"+url.Values{"level": {level}}.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.secret)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("журнал sing-box: %s", resp.Status)
+	}
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	for sc.Scan() {
+		var l clashLog
+		if json.Unmarshal(sc.Bytes(), &l) == nil {
+			fn(l)
+		}
+	}
+	return sc.Err()
+}
+
 // waitReady ждёт, пока sing-box поднимет API.
 func (c *clash) waitReady(ctx context.Context, timeout time.Duration, exited <-chan struct{}) error {
 	deadline := time.Now().Add(timeout)
