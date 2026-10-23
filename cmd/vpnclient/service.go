@@ -683,8 +683,11 @@ func (s *Service) refreshTray(st app.State) {
 	}
 	// Wails молча откатывает иконку, если Explorer ещё не зарегистрировал её
 	// (старт системы, перезапуск Explorer), поэтому периодически ставим заново.
+	// Тёмную иконку задаём явно: если SetIcon попал между созданием трея и его
+	// регистрацией, Wails оставляет старую иконку для тёмной панели задач.
 	if iconName != s.lastIcon || time.Since(s.lastIconAt) > 10*time.Second {
 		s.tray.SetIcon(icon(iconName))
+		s.tray.SetDarkModeIcon(icon(iconName))
 		s.lastIcon, s.lastIconAt = iconName, time.Now()
 	}
 
