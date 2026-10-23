@@ -55,8 +55,7 @@ type Service struct {
 	lastTooltip string
 	lastMenu    string
 
-	quitting   atomic.Bool
-	relaunched atomic.Bool
+	quitting atomic.Bool
 }
 
 func newService(version string, logger *slog.Logger) *Service {
@@ -577,8 +576,10 @@ func (s *Service) relaunch(exe string) bool {
 		}
 		if err = cmd.Start(); err == nil {
 			_ = cmd.Process.Release()
-			s.relaunched.Store(true)
-			s.Quit()
+			// Не через Quit: тот отключает VPN, а служба только что
+			// переподключилась после обновления.
+			s.quitting.Store(true)
+			s.wapp.Quit()
 			return true
 		}
 		s.log.Warn("перезапуск окна не удался", "attempt", attempt+1, "err", err)
