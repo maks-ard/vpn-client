@@ -14,19 +14,12 @@ import (
 // администратора, а папка с программой может быть доступна на запись
 // обычному пользователю.
 func Install(dir string, data []byte) (path string, release func(), err error) {
-	name := "sing-box"
-	if isWindows {
-		name += ".exe"
+	if path, release, err := Open(dir, data); err == nil {
+		return path, release, nil
 	}
-	path = filepath.Join(dir, name)
+	path = Path(dir)
+	name := filepath.Base(path)
 	want := sha256.Sum256(data)
-
-	if f, err := openLocked(path); err == nil {
-		if sum, err := hashFile(f); err == nil && sum == want {
-			return path, func() { _ = f.Close() }, nil
-		}
-		_ = f.Close()
-	}
 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", nil, err
@@ -57,6 +50,35 @@ func Install(dir string, data []byte) (path string, release func(), err error) {
 	if sum, err := hashFile(f); err != nil || sum != want {
 		_ = f.Close()
 		return "", nil, fmt.Errorf("распакованный sing-box повреждён или подменён: %s", path)
+	}
+	return path, func() { _ = f.Close() }, nil
+}
+
+// Path — куда Install распаковывает sing-box.
+func Path(dir string) string {
+	name := "sing-box"
+	if isWindows {
+		name += ".exe"
+	}
+	return filepath.Join(dir, name)
+}
+
+// Open открывает уже распакованный sing-box так же, как Install, но ничего не
+// записывает: файл работающего процесса заменить нельзя. Ошибка — файла нет
+// или он отличается от встроенного.
+func Open(dir string, data []byte) (path string, release func(), err error) {
+	path = Path(dir)
+	f, err := openLocked(path)
+	if err != nil {
+		return "", nil, err
+	}
+	sum, err := hashFile(f)
+	if err == nil && sum != sha256.Sum256(data) {
+		err = fmt.Errorf("%s отличается от встроенного sing-box", path)
+	}
+	if err != nil {
+		_ = f.Close()
+		return "", nil, err
 	}
 	return path, func() { _ = f.Close() }, nil
 }

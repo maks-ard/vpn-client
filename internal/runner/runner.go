@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,42 +31,140 @@ type Options struct {
 	Output io.Writer
 }
 
-// Run запускает sing-box и ждёт, пока он не завершится или не отменят ctx.
-// При отмене ctx sing-box получает сигнал на корректное завершение, чтобы
-// успеть убрать маршруты и TUN-адаптер.
-func Run(ctx context.Context, opts Options) error {
+// Process — запущенный нами или подхваченный у прошлой версии службы sing-box.
+type Process struct {
+	sys     *osProcess
+	done    chan struct{}
+	err     error
+	handed  atomic.Bool
+	stopped sync.Once
+}
+
+// Handoff описывает sing-box, который продолжает работать после выхода
+// своего владельца: новая версия службы находит его и берёт под управление.
+type Handoff struct {
+	// Job — имя Job Object: пока его держит хоть один процесс, sing-box жив.
+	Job string `json:"job"`
+	PID int    `json:"pid"`
+	// Created — время запуска процесса, чтобы не перепутать его с чужим
+	// процессом, получившим тот же PID.
+	Created int64 `json:"created"`
+}
+
+// Start запускает sing-box. Остановить его нужно через Stop или Handoff.
+func Start(opts Options) (*Process, error) {
 	cmd := exec.Command(opts.Exe, "run", "-c", "stdin", "-D", opts.DataDir, "--disable-color")
 	cmd.Stdin = bytes.NewReader(opts.Config)
 	cmd.Stdout = opts.Output
 	cmd.Stderr = opts.Output
 	prepare(cmd)
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("запуск sing-box: %w", err)
+		return nil, fmt.Errorf("запуск sing-box: %w", err)
 	}
-	cleanup := attach(cmd)
-	defer cleanup()
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	select {
-	case err := <-done:
+	p := &Process{sys: attach(cmd), done: make(chan struct{})}
+	go func() {
+		err := cmd.Wait()
 		if err != nil {
-			return fmt.Errorf("sing-box завершился: %w", err)
+			err = fmt.Errorf("sing-box завершился: %w", err)
+		} else {
+			err = errors.New("sing-box неожиданно завершился")
 		}
-		return errors.New("sing-box неожиданно завершился")
+		p.finish(err)
+	}()
+	return p, nil
+}
+
+// Adopt берёт под управление sing-box, переданный через Handoff. exe — путь,
+// с которого процесс обязан быть запущен.
+func Adopt(h Handoff, exe string) (*Process, error) {
+	sys, err := adopt(h, exe)
+	if err != nil {
+		return nil, fmt.Errorf("подхват sing-box: %w", err)
+	}
+	p := &Process{sys: sys, done: make(chan struct{})}
+	go func() {
+		code, err := sys.wait()
+		switch {
+		case err != nil:
+			err = fmt.Errorf("sing-box: ожидание завершения: %w", err)
+		case code != 0:
+			err = fmt.Errorf("sing-box завершился с кодом %d", code)
+		default:
+			err = errors.New("sing-box неожиданно завершился")
+		}
+		p.finish(err)
+	}()
+	return p, nil
+}
+
+func (p *Process) finish(err error) {
+	p.err = err
+	// Переданный job закрывать нельзя, пока новый владелец его не открыл:
+	// дескриптор закроется вместе с нашим процессом.
+	if !p.handed.Load() {
+		p.sys.close()
+	}
+	close(p.done)
+}
+
+// Done закрывается, когда sing-box завершился.
+func (p *Process) Done() <-chan struct{} { return p.done }
+
+// Err — причина завершения; вызывать после Done.
+func (p *Process) Err() error {
+	<-p.done
+	return p.err
+}
+
+// Stop просит sing-box завершиться, чтобы он успел убрать маршруты и
+// TUN-адаптер, и ждёт его. Не ответивший за stopTimeout процесс убивается.
+func (p *Process) Stop() {
+	if p.handed.Load() {
+		return
+	}
+	p.stopped.Do(func() {
+		select {
+		case <-p.done:
+			return
+		default:
+		}
+		if err := p.sys.interrupt(); err != nil {
+			_ = p.sys.kill()
+		}
+		select {
+		case <-p.done:
+		case <-time.After(stopTimeout):
+			_ = p.sys.kill()
+			<-p.done
+		}
+	})
+}
+
+// Handoff отпускает sing-box: он продолжит работать после выхода этого
+// процесса, если до тех пор кто-то откроет его job по имени.
+func (p *Process) Handoff() (Handoff, error) {
+	h, err := p.sys.handoff()
+	if err != nil {
+		return Handoff{}, fmt.Errorf("передача sing-box: %w", err)
+	}
+	p.handed.Store(true)
+	return h, nil
+}
+
+// Run запускает sing-box и ждёт, пока он не завершится или не отменят ctx.
+// При отмене ctx sing-box получает сигнал на корректное завершение, чтобы
+// успеть убрать маршруты и TUN-адаптер.
+func Run(ctx context.Context, opts Options) error {
+	p, err := Start(opts)
+	if err != nil {
+		return err
+	}
+	select {
+	case <-p.Done():
+		return p.Err()
 	case <-ctx.Done():
 	}
-
-	if err := interrupt(cmd); err != nil {
-		_ = cmd.Process.Kill()
-	}
-	select {
-	case <-done:
-	case <-time.After(stopTimeout):
-		_ = cmd.Process.Kill()
-		<-done
-	}
+	p.Stop()
 	return nil
 }
 
