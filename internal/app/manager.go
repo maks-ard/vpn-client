@@ -748,7 +748,9 @@ func (m *Manager) refreshProxies(ctx context.Context, api *clash) {
 	}
 	m.update(func(s *State) {
 		sel := proxies[singbox.TagProxy]
-		if sel.Type == "Selector" || len(sel.All) > 0 {
+		// Единственный сервер с несколькими вариантами — urltest под тегом
+		// proxy: выбирать в нём нечего, показываем общую задержку.
+		if sel.Type != "URLTest" && (sel.Type == "Selector" || len(sel.All) > 0) {
 			s.Proxy.Selected = sel.Now
 			// failover закрепляет сервер в selector, но выбор пользователя — «авто».
 			if m.settings.Server == "" {
@@ -886,11 +888,13 @@ func (m *Manager) idleState() State {
 
 func proxyStateFromInput(in *singbox.Input, settings Settings) ProxyState {
 	p := ProxyState{Enabled: len(in.Servers) > 0, Selected: singbox.TagAuto}
-	if settings.Server != "" {
-		p.Selected = settings.Server
-	}
-	for _, l := range in.Servers {
-		p.Servers = append(p.Servers, Server{Name: l.Name})
+	for _, s := range in.Servers {
+		p.Servers = append(p.Servers, Server{Name: s.Name})
+		// Сохранённого сервера может уже не быть в подписке — тогда, как и
+		// sing-box, остаёмся на «авто».
+		if s.Name == settings.Server {
+			p.Selected = s.Name
+		}
 	}
 	if len(in.Servers) == 1 {
 		p.Current = in.Servers[0].Name

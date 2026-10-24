@@ -51,7 +51,7 @@ type M = map[string]any
 type Input struct {
 	Profile *profile.Profile
 	// Servers — VLESS-серверы: одна ссылка из профиля или список из подписки.
-	Servers []*vless.Link
+	Servers []subscription.Server
 	// Subscription — подписка, если серверы взяты из неё.
 	Subscription *subscription.Subscription
 	OpenVPN      *ovpn.Config
@@ -87,7 +87,7 @@ func FromProfile(ctx context.Context, p *profile.Profile, dataDir string) (*Inpu
 		if err != nil {
 			return nil, fmt.Errorf("vless: %w", err)
 		}
-		in.Servers = []*vless.Link{link}
+		in.Servers = []subscription.Server{{Name: link.Name, Links: []*vless.Link{link}}}
 	case p.Subscription != nil:
 		sub, err := subscription.Get(ctx, p.Subscription.URL, p.Subscription.UserAgent, dataDir)
 		if err != nil {

@@ -22,7 +22,7 @@ func TestParseBase64(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sub.Servers) != 2 || sub.Servers[0].Name != "🇳🇱 Нидерланды" || sub.Servers[1].Transport != "ws" {
+	if len(sub.Servers) != 2 || sub.Servers[0].Name != "🇳🇱 Нидерланды" || sub.Servers[1].Links[0].Transport != "ws" {
 		t.Errorf("servers: %+v", sub.Servers)
 	}
 	if len(sub.Skipped) != 1 || !strings.HasPrefix(sub.Skipped[0], "trojan") {

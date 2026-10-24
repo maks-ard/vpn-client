@@ -11,8 +11,9 @@ import (
 )
 
 // Формат Xray JSON: панели (Remnawave и др.) для части клиентов отдают не
-// ссылки, а массив готовых конфигов Xray — по одному на сервер, плюс
-// конфиги-балансировщики вроде «Авто» с несколькими outbound.
+// ссылки, а массив готовых конфигов Xray — по одному на точку входа, часто с
+// несколькими транспортами и балансировщиком внутри, плюс конфиги вроде
+// «Авто», собранные из серверов остальных.
 
 type xrayConfig struct {
 	Remarks string `json:"remarks"`
@@ -87,8 +88,9 @@ func isJSON(text string) bool {
 	return strings.HasPrefix(text, "[") || strings.HasPrefix(text, "{")
 }
 
-// parseXrayJSON достаёт VLESS-серверы из подписки в формате Xray JSON.
-func parseXrayJSON(text string) (links []*vless.Link, skipped []string, err error) {
+// parseXrayJSON достаёт VLESS-серверы из подписки в формате Xray JSON:
+// конфиг — один пункт списка, его outbound'ы — варианты подключения.
+func parseXrayJSON(text string) (servers []Server, skipped []string, err error) {
 	var configs []xrayConfig
 	if strings.HasPrefix(text, "{") {
 		var one xrayConfig
@@ -100,76 +102,100 @@ func parseXrayJSON(text string) (links []*vless.Link, skipped []string, err erro
 		return nil, nil, fmt.Errorf("подписка в формате JSON не разобрана: %w", err)
 	}
 
-	type candidate struct {
-		link *vless.Link
-		key  string
-	}
-	var single, multi []candidate
-	seenSkip := map[string]bool{}
+	entries := make([]xrayEntry, 0, len(configs))
 	for _, cfg := range configs {
-		var found []candidate
-		var cfgSkipped []string
-		proxies := 0
+		e := xrayEntry{keys: map[string]bool{}}
 		for _, ob := range cfg.Outbounds {
 			switch ob.Protocol {
 			case "freedom", "blackhole", "dns", "loopback", "":
 				continue
 			}
-			proxies++
 			if ob.Protocol != "vless" {
-				cfgSkipped = append(cfgSkipped, fmt.Sprintf("%s: протокол %s пока не поддерживается", nameOr(cfg.Remarks, ob.Tag), ob.Protocol))
+				e.skipped = append(e.skipped, fmt.Sprintf("%s: протокол %s пока не поддерживается", nameOr(cfg.Remarks, ob.Tag), ob.Protocol))
 				continue
 			}
 			raw, err := xrayToVLESSURL(ob, cfg)
 			if err != nil {
-				cfgSkipped = append(cfgSkipped, fmt.Sprintf("%s: %v", nameOr(cfg.Remarks, ob.Tag), err))
+				e.skipped = append(e.skipped, fmt.Sprintf("%s: %v", nameOr(cfg.Remarks, ob.Tag), err))
 				continue
 			}
 			link, err := vless.Parse(raw)
 			if err != nil {
-				cfgSkipped = append(cfgSkipped, fmt.Sprintf("%s: %v", nameOr(cfg.Remarks, ob.Tag), err))
+				e.skipped = append(e.skipped, fmt.Sprintf("%s: %v", nameOr(cfg.Remarks, ob.Tag), err))
 				continue
 			}
-			found = append(found, candidate{link: link, key: serverKey(link)})
+			key := serverKey(link)
+			if e.keys[key] {
+				continue
+			}
+			e.keys[key] = true
+			e.server.Links = append(e.server.Links, link)
 		}
-		// Пропуски внутри балансировщика не показываем: те же серверы есть
-		// отдельными конфигами и сообщат о себе сами.
-		if proxies <= 1 {
-			for _, msg := range cfgSkipped {
+		if len(e.server.Links) > 0 {
+			e.server.Name = nameOr(cfg.Remarks, e.server.Links[0].Name)
+		}
+		entries = append(entries, e)
+	}
+
+	seenSkip := map[string]bool{}
+	for i, e := range entries {
+		// Неподходящие варианты (например, XHTTP) при рабочих соседях не
+		// показываем: пункт списка всё равно подключится.
+		if len(e.server.Links) == 0 {
+			for _, msg := range e.skipped {
 				if !seenSkip[msg] {
 					seenSkip[msg] = true
 					skipped = append(skipped, msg)
 				}
 			}
-		}
-		switch len(found) {
-		case 0:
-		case 1:
-			found[0].link.Name = nameOr(cfg.Remarks, found[0].link.Name)
-			single = append(single, found[0])
-		default:
-			// Балансировщик («Авто»): его серверы повторяют отдельные конфиги,
-			// а выбор самого быстрого делаем сами.
-			multi = append(multi, found...)
-		}
-	}
-
-	// Серверы балансировщика берём, только если отдельных конфигов нет:
-	// адреса в нём служебные (rmn-…), поэтому дубли не распознаются,
-	// а имена — технические теги outbound'ов.
-	candidates := single
-	if len(candidates) == 0 {
-		candidates = multi
-	}
-	seen := map[string]bool{}
-	for _, c := range candidates {
-		if seen[c.key] {
 			continue
 		}
-		seen[c.key] = true
-		links = append(links, c.link)
+		if covered(entries, i) {
+			continue
+		}
+		servers = append(servers, e.server)
 	}
-	return links, skipped, nil
+	return servers, skipped, nil
+}
+
+type xrayEntry struct {
+	server  Server
+	keys    map[string]bool
+	skipped []string
+}
+
+// covered сообщает, что конфиг целиком повторяет другие: так выглядят
+// балансировщики вроде «⚡ Авто», собранные из серверов отдельных конфигов.
+// Самый быстрый сервер мы выбираем сами, а такой пункт только дублирует список.
+func covered(entries []xrayEntry, i int) bool {
+	e := entries[i]
+	for key := range e.keys {
+		found := false
+		for j, other := range entries {
+			if j == i || !other.keys[key] {
+				continue
+			}
+			smaller := len(other.keys) < len(e.keys)
+			sameEarlier := j < i && len(other.keys) == len(e.keys) && sameKeys(other.keys, e.keys)
+			if smaller || sameEarlier {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func sameKeys(a, b map[string]bool) bool {
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return len(a) == len(b)
 }
 
 // xrayToVLESSURL переводит outbound Xray в ссылку vless://, чтобы проверить

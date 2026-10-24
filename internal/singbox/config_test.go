@@ -3,6 +3,7 @@ package singbox
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/maks-ard/vpn-client/internal/profile"
 	"github.com/maks-ard/vpn-client/internal/subscription"
+	"github.com/maks-ard/vpn-client/internal/vless"
 )
 
 func loadTestConfig(t *testing.T) M {
@@ -223,6 +225,18 @@ func TestSingBoxCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	singBoxCheck(t, exe, data)
+
+	// Серверы с несколькими транспортами: вложенные urltest.
+	in.Servers = variantServers()
+	if data, err = Build(in); err != nil {
+		t.Fatal(err)
+	}
+	singBoxCheck(t, exe, data)
+	in.Servers = in.Servers[:1]
+	if data, err = Build(in); err != nil {
+		t.Fatal(err)
+	}
+	singBoxCheck(t, exe, data)
 }
 
 func singBoxCheck(t *testing.T, exe string, config []byte) {
@@ -268,6 +282,66 @@ func TestBuildSubscription(t *testing.T) {
 	}
 	if auto := byTag[TagAuto]; auto["type"] != "urltest" || len(auto["outbounds"].([]any)) != 4 {
 		t.Errorf("urltest = %v", auto)
+	}
+}
+
+// variantServers — два сервера, у первого два транспорта, как в подписках
+// Remnawave; у второго имя совпадает с тегом варианта первого.
+func variantServers() []subscription.Server {
+	parse := func(raw string) *vless.Link {
+		l, err := vless.Parse(raw)
+		if err != nil {
+			panic(err)
+		}
+		return l
+	}
+	return []subscription.Server{
+		{Name: "NL", Links: []*vless.Link{
+			parse("vless://id1@nl.example.com:443?security=reality&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&sni=a.com#nl-rl"),
+			parse("vless://id1@nl.example.com:80?type=ws&path=/ws#nl-ws"),
+		}},
+		{Name: "NL / nl-ws", Links: []*vless.Link{parse("vless://id2@de.example.com:443?security=tls#de")}},
+	}
+}
+
+func TestBuildServerVariants(t *testing.T) {
+	p, err := profile.Parse([]byte("subscription:\n  url: https://example.com/sub\n  server: NL\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := Build(&Input{Profile: p, Servers: variantServers()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg M
+	_ = json.Unmarshal(data, &cfg)
+	byTag := map[string]M{}
+	for _, o := range cfg["outbounds"].([]any) {
+		byTag[o.(M)["tag"].(string)] = o.(M)
+	}
+	if nl := byTag["NL"]; nl["type"] != "urltest" || fmt.Sprint(nl["outbounds"]) != "[NL / nl-rl NL / nl-ws ]" {
+		t.Errorf("NL = %v, есть: %v", nl, keys(byTag))
+	}
+	if byTag["NL / nl-ws"]["type"] != "vless" || byTag["NL / nl-ws "]["type"] != "vless" {
+		t.Errorf("теги вариантов и сервера пересеклись: %v", keys(byTag))
+	}
+	if sel := byTag[TagProxy]; sel["default"] != "NL" || fmt.Sprint(sel["outbounds"]) != "[auto NL NL / nl-ws]" {
+		t.Errorf("selector = %v", sel)
+	}
+
+	// Один сервер с вариантами — сам становится proxy.
+	data, err = Build(&Input{Profile: p, Servers: variantServers()[:1]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg = nil
+	_ = json.Unmarshal(data, &cfg)
+	byTag = map[string]M{}
+	for _, o := range cfg["outbounds"].([]any) {
+		byTag[o.(M)["tag"].(string)] = o.(M)
+	}
+	if px := byTag[TagProxy]; px["type"] != "urltest" || byTag[TagAuto] != nil || byTag["proxy / nl-rl"] == nil {
+		t.Errorf("один сервер: %v", keys(byTag))
 	}
 }
 

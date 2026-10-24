@@ -8,6 +8,7 @@ import (
 
 	"github.com/maks-ard/vpn-client/internal/ovpn"
 	"github.com/maks-ard/vpn-client/internal/profile"
+	"github.com/maks-ard/vpn-client/internal/subscription"
 	"github.com/maks-ard/vpn-client/internal/vless"
 )
 
@@ -19,29 +20,33 @@ const URLTestURL = "https://www.youtube.com/generate_204"
 // proxyOutbounds: один сервер — это сразу outbound proxy; несколько —
 // selector proxy с вариантом auto (urltest выбирает самый быстрый) и
 // каждым сервером отдельно, чтобы его можно было выбрать вручную.
+// Сервер с несколькими вариантами подключения — urltest по ним: вложенные
+// группы sing-box проверяет и показывает в Clash API как обычные серверы.
 func proxyOutbounds(in *Input) ([]any, error) {
-	if len(in.Servers) == 1 {
-		ob, err := vlessOutbound(in.Servers[0], TagProxy)
-		if err != nil {
-			return nil, err
-		}
-		return []any{ob}, nil
-	}
 	reserved := map[string]bool{TagDirect: true, TagProxy: true, TagAuto: true, TagCorp: true}
-	var out []any
-	var tags []string
-	for _, l := range in.Servers {
-		tag := l.Name
+	unique := func(tag string) string {
 		for reserved[tag] {
 			tag += " "
 		}
 		reserved[tag] = true
-		ob, err := vlessOutbound(l, tag)
+		return tag
+	}
+	if len(in.Servers) == 1 {
+		return serverOutbounds(in.Servers[0], TagProxy, unique)
+	}
+	// Имена серверов занимаем заранее: теги вариантов строятся из них
+	// и не должны совпасть с соседним сервером.
+	var tags []string
+	for _, s := range in.Servers {
+		tags = append(tags, unique(s.Name))
+	}
+	var out []any
+	for i, s := range in.Servers {
+		obs, err := serverOutbounds(s, tags[i], unique)
 		if err != nil {
-			return nil, fmt.Errorf("сервер %q: %w", l.Name, err)
+			return nil, err
 		}
-		out = append(out, ob)
-		tags = append(tags, tag)
+		out = append(out, obs...)
 	}
 	selected := TagAuto
 	if sub := in.Profile.Subscription; sub != nil && sub.Server != "" {
@@ -52,14 +57,7 @@ func proxyOutbounds(in *Input) ([]any, error) {
 		}
 	}
 	out = append(out,
-		M{
-			"type":      "urltest",
-			"tag":       TagAuto,
-			"outbounds": tags,
-			"url":       URLTestURL,
-			"interval":  "5m",
-			"tolerance": 50,
-		},
+		urlTest(TagAuto, tags),
 		M{
 			"type":      "selector",
 			"tag":       TagProxy,
@@ -71,6 +69,44 @@ func proxyOutbounds(in *Input) ([]any, error) {
 		},
 	)
 	return out, nil
+}
+
+// serverOutbounds собирает outbound'ы одного сервера под тегом tag: сам
+// VLESS или urltest по его вариантам.
+func serverOutbounds(s subscription.Server, tag string, unique func(string) string) ([]any, error) {
+	if len(s.Links) == 1 {
+		ob, err := vlessOutbound(s.Links[0], tag)
+		if err != nil && s.Name != "" {
+			err = fmt.Errorf("сервер %q: %w", s.Name, err)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return []any{ob}, nil
+	}
+	var out []any
+	var variants []string
+	for _, l := range s.Links {
+		vtag := unique(strings.TrimSpace(tag) + " / " + l.Name)
+		ob, err := vlessOutbound(l, vtag)
+		if err != nil {
+			return nil, fmt.Errorf("сервер %q (%s): %w", s.Name, l.Name, err)
+		}
+		out = append(out, ob)
+		variants = append(variants, vtag)
+	}
+	return append(out, urlTest(tag, variants)), nil
+}
+
+func urlTest(tag string, outbounds []string) M {
+	return M{
+		"type":      "urltest",
+		"tag":       tag,
+		"outbounds": outbounds,
+		"url":       URLTestURL,
+		"interval":  "5m",
+		"tolerance": 50,
+	}
 }
 
 func vlessOutbound(l *vless.Link, tag string) (M, error) {

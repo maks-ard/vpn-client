@@ -1,12 +1,14 @@
 package subscription
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
 
 // Подписка в формате Xray JSON, как её отдаёт Remnawave: отдельный конфиг на
-// сервер плюс балансировщик «Авто». Адреса и ключи выдуманные.
+// точку входа (иногда с несколькими транспортами) плюс балансировщик «Авто»
+// из тех же серверов. Адреса и ключи выдуманные.
 const xraySub = `[
  {"remarks":"⚡ Авто","dns":{"hosts":{"rmn-nl":"203.0.113.10","rmn-de":["203.0.113.20","203.0.113.21"]}},
   "outbounds":[
@@ -27,6 +29,16 @@ const xraySub = `[
  {"remarks":"🇩🇪 Германия","dns":{"hosts":{"rmn-de":["203.0.113.20"]}},
   "outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"rmn-de","port":8443,"users":[{"id":"22222222-2222-2222-2222-222222222222","encryption":"none"}]}]},
     "streamSettings":{"network":"ws","security":"tls","tlsSettings":{"serverName":"de.example.com","alpn":["http/1.1"]},"wsSettings":{"path":"/ws","headers":{"Host":"de.example.com"}}}}]},
+ {"remarks":"🇺🇸 США",
+  "outbounds":[
+   {"tag":"us-gr","protocol":"vless","settings":{"address":"198.51.100.5","port":443,"id":"33333333-3333-3333-3333-333333333333","encryption":"none"},
+    "streamSettings":{"network":"grpc","security":"reality","realitySettings":{"serverName":"a.com","password":"jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0"},"grpcSettings":{"serviceName":"svc"}}},
+   {"tag":"us-ws","protocol":"vless","settings":{"address":"198.51.100.5","port":80,"id":"33333333-3333-3333-3333-333333333333","encryption":"none"},
+    "streamSettings":{"network":"ws","wsSettings":{"path":"/us"}}},
+   {"tag":"us-xh","protocol":"vless","settings":{"address":"198.51.100.5","port":443,"id":"33333333-3333-3333-3333-333333333333"},
+    "streamSettings":{"network":"xhttp","security":"tls"}},
+   {"tag":"direct","protocol":"freedom"}],
+  "routing":{"balancers":[{"tag":"proxy","selector":["us-gr","us-ws","us-xh"]}]}},
  {"remarks":"🇫🇮 Финляндия XHTTP",
   "outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"fi.example.com","port":443,"users":[{"id":"44444444-4444-4444-4444-444444444444","encryption":"none"}]}]},
     "streamSettings":{"network":"xhttp","security":"tls"}}]},
@@ -42,11 +54,15 @@ func TestParseXrayJSON(t *testing.T) {
 	for _, s := range sub.Servers {
 		names = append(names, s.Name)
 	}
-	// Берутся отдельные конфиги под своими именами, балансировщик не нужен.
-	if strings.Join(names, ",") != "🇳🇱 Нидерланды,🇩🇪 Германия" {
+	// Конфиг на точку входа — один пункт под своим именем; «Авто» повторяет
+	// остальные конфиги и не нужен.
+	if strings.Join(names, ",") != "🇳🇱 Нидерланды,🇩🇪 Германия,🇺🇸 США" {
 		t.Fatalf("серверы: %q", names)
 	}
-	nl, de := sub.Servers[0], sub.Servers[1]
+	if len(sub.Servers[0].Links) != 1 || len(sub.Servers[1].Links) != 1 {
+		t.Fatalf("варианты: %+v", sub.Servers)
+	}
+	nl, de := sub.Servers[0].Links[0], sub.Servers[1].Links[0]
 	if nl.Server != "203.0.113.10" || nl.Port != 443 || nl.Security != "reality" || nl.PublicKey != "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0" ||
 		nl.ShortID != "ab12" || nl.SNI != "www.microsoft.com" || nl.Flow != "xtls-rprx-vision" || nl.Fingerprint != "chrome" {
 		t.Errorf("NL: %+v", nl)
@@ -55,25 +71,49 @@ func TestParseXrayJSON(t *testing.T) {
 		de.SNI != "de.example.com" || de.Security != "tls" || len(de.ALPN) != 1 {
 		t.Errorf("DE: %+v", de)
 	}
+	// Транспорты одной точки — варианты одного пункта; XHTTP не поддерживается
+	// и молча отбрасывается, раз есть другие варианты.
+	us := sub.Servers[2].Links
+	if len(us) != 2 || us[0].Name != "us-gr" || us[1].Name != "us-ws" {
+		t.Fatalf("США: %+v", us)
+	}
+	if gr := us[0]; gr.Server != "198.51.100.5" || gr.Transport != "grpc" || gr.ServiceName != "svc" ||
+		gr.PublicKey != "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0" {
+		t.Errorf("us-gr (плоский формат, password): %+v", gr)
+	}
+	joined := strings.Join(sub.Skipped, "\n")
+	if !strings.Contains(joined, "Финляндия XHTTP") || !strings.Contains(joined, "trojan") || len(sub.Skipped) != 2 {
+		t.Errorf("skipped: %v", sub.Skipped)
+	}
 
-	// Если в подписке только балансировщик — серверы берутся из него.
+	// Если в подписке только балансировщик — он и есть единственный пункт.
 	start := strings.Index(xraySub, `{"remarks":"⚡ Авто"`)
 	end := strings.Index(xraySub, `{"remarks":"🇳🇱 Нидерланды"`)
 	only, err := Parse([]byte("["+strings.TrimRight(strings.TrimSpace(xraySub[start:end]), ",")+"]"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(only.Servers) != 3 {
-		t.Fatalf("из балансировщика: %d серверов", len(only.Servers))
+	if len(only.Servers) != 1 || only.Servers[0].Name != "⚡ Авто" || len(only.Servers[0].Links) != 3 {
+		t.Fatalf("из балансировщика: %+v", only.Servers)
 	}
-	extra := only.Servers[2]
-	if extra.Name != "extra" || extra.Server != "198.51.100.5" || extra.Transport != "grpc" || extra.ServiceName != "svc" ||
-		extra.PublicKey != "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0" {
-		t.Errorf("extra (плоский формат, password): %+v", extra)
+}
+
+func TestParseXrayJSONDuplicates(t *testing.T) {
+	// Одинаковые конфиги показываются один раз, а балансировщик с собственным
+	// сервером остаётся: этого сервера больше нигде нет.
+	one := `{"remarks":"%s","outbounds":[{"tag":"a","protocol":"vless","settings":{"address":"a.example.com","port":443,"id":"55555555-5555-5555-5555-555555555555"},"streamSettings":{"security":"tls"}}%s]}`
+	own := `,{"tag":"own","protocol":"vless","settings":{"address":"own.example.com","port":443,"id":"55555555-5555-5555-5555-555555555555"},"streamSettings":{"security":"tls"}}`
+	body := "[" + strings.Join([]string{
+		fmt.Sprintf(one, "A", ""),
+		fmt.Sprintf(one, "A копия", ""),
+		fmt.Sprintf(one, "Авто", own),
+	}, ",") + "]"
+	sub, err := Parse([]byte(body), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	joined := strings.Join(sub.Skipped, "\n")
-	if !strings.Contains(joined, "Финляндия XHTTP") || !strings.Contains(joined, "trojan") || len(sub.Skipped) != 2 {
-		t.Errorf("skipped: %v", sub.Skipped)
+	if len(sub.Servers) != 2 || sub.Servers[0].Name != "A" || sub.Servers[1].Name != "Авто" {
+		t.Errorf("серверы: %+v", sub.Servers)
 	}
 }
 
@@ -82,7 +122,7 @@ func TestParseXrayJSONSingleObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sub.Servers) != 1 || sub.Servers[0].Name != "One" || sub.Servers[0].SNI != "one.example.com" {
+	if len(sub.Servers) != 1 || sub.Servers[0].Name != "One" || sub.Servers[0].Links[0].SNI != "one.example.com" {
 		t.Errorf("servers: %+v", sub.Servers[0])
 	}
 	if _, err := Parse([]byte(`[{"remarks":"x","outbounds":[{"protocol":"trojan"}]}]`), nil); err == nil {

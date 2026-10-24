@@ -35,9 +35,18 @@ type Info struct {
 	Expire   time.Time `json:"expire,omitempty"`
 }
 
+// Server — пункт списка серверов. Панели (Remnawave и др.) кладут в одну
+// запись несколько вариантов подключения к одной точке — разные транспорты
+// на случай блокировок. Пользователь выбирает запись, вариант sing-box
+// выбирает сам.
+type Server struct {
+	Name  string
+	Links []*vless.Link
+}
+
 type Subscription struct {
 	Info
-	Servers []*vless.Link
+	Servers []Server
 	// Skipped — строки, которые не удалось использовать (другой протокол и т.п.).
 	Skipped []string
 	// FetchedAt — когда список был получен с сервера.
@@ -117,11 +126,11 @@ func Parse(body []byte, header http.Header) (*Subscription, error) {
 		return nil, errors.New("вместо подписки пришла веб-страница; проверьте ссылку")
 	}
 	if isJSON(text) {
-		links, skipped, err := parseXrayJSON(text)
+		servers, skipped, err := parseXrayJSON(text)
 		if err != nil {
 			return nil, err
 		}
-		return finish(&Subscription{Info: parseInfo(header), Skipped: skipped}, links)
+		return finish(&Subscription{Info: parseInfo(header), Skipped: skipped}, servers)
 	}
 	if !strings.Contains(text, "://") {
 		decoded, err := decodeBase64(text)
@@ -132,7 +141,7 @@ func Parse(body []byte, header http.Header) (*Subscription, error) {
 	}
 
 	sub := &Subscription{Info: parseInfo(header)}
-	var links []*vless.Link
+	var servers []Server
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -151,26 +160,26 @@ func Parse(body []byte, header http.Header) (*Subscription, error) {
 			sub.Skipped = append(sub.Skipped, err.Error())
 			continue
 		}
-		links = append(links, link)
+		servers = append(servers, Server{Name: link.Name, Links: []*vless.Link{link}})
 	}
-	return finish(sub, links)
+	return finish(sub, servers)
 }
 
 // finish даёт серверам уникальные имена (они становятся тегами в sing-box)
 // и проверяет, что хоть один сервер есть.
-func finish(sub *Subscription, links []*vless.Link) (*Subscription, error) {
+func finish(sub *Subscription, servers []Server) (*Subscription, error) {
 	names := map[string]int{}
-	for _, link := range links {
-		if link.Name == "" {
-			link.Name = link.Server
+	for _, server := range servers {
+		if server.Name == "" {
+			server.Name = server.Links[0].Server
 		}
-		if n := names[link.Name]; n > 0 {
-			names[link.Name]++
-			link.Name = fmt.Sprintf("%s (%d)", link.Name, n+1)
+		if n := names[server.Name]; n > 0 {
+			names[server.Name]++
+			server.Name = fmt.Sprintf("%s (%d)", server.Name, n+1)
 		} else {
-			names[link.Name] = 1
+			names[server.Name] = 1
 		}
-		sub.Servers = append(sub.Servers, link)
+		sub.Servers = append(sub.Servers, server)
 	}
 	if len(sub.Servers) == 0 {
 		if len(sub.Skipped) > 0 {
