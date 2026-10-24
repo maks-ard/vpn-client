@@ -26,6 +26,10 @@ type Settings struct {
 	OVPNPassword string   `json:"ovpnPassword"`
 	CorpDomains  []string `json:"corpDomains"`
 
+	// Categories — готовые и свои категории с направлением. Порядок задаёт
+	// приоритет. В старых settings.json поля нет: это то же, что пустой список.
+	Categories []profile.Category `json:"categories"`
+
 	RussiaDirect   bool `json:"russiaDirect"`
 	Autostart      bool `json:"autostart"`
 	ConnectOnStart bool `json:"connectOnStart"`
@@ -140,6 +144,11 @@ func (s *Settings) normalize() error {
 		domains = append(domains, d)
 	}
 	s.CorpDomains = domains
+	cats, err := profile.NormalizeCategories(s.Categories)
+	if err != nil {
+		return err
+	}
+	s.Categories = cats
 	return nil
 }
 
@@ -158,6 +167,7 @@ func (s Settings) profile(p Paths) (*profile.Profile, error) {
 	}
 	rd := s.RussiaDirect
 	prof.Routing.RussiaDirect = &rd
+	prof.Routing.Categories = s.Categories
 	if err := prof.Normalize(p.Config); err != nil {
 		if prof.VLESS == "" && prof.Subscription == nil && prof.OpenVPN == nil {
 			return nil, errors.New("укажите ссылку на подписку или загрузите файл .ovpn в настройках")

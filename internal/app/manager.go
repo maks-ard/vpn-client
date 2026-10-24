@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	mrand "math/rand/v2"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/maks-ard/vpn-client/internal/profile"
 	"github.com/maks-ard/vpn-client/internal/runner"
 	"github.com/maks-ard/vpn-client/internal/singbox"
 	"github.com/maks-ard/vpn-client/internal/singboxbin"
@@ -184,7 +186,23 @@ func (m *Manager) SaveSettings(s Settings) error {
 
 func routingChanged(a, b Settings) bool {
 	return a.Link != b.Link || a.OVPNUsername != b.OVPNUsername || a.OVPNPassword != b.OVPNPassword ||
-		a.RussiaDirect != b.RussiaDirect || strings.Join(a.CorpDomains, ",") != strings.Join(b.CorpDomains, ",")
+		a.RussiaDirect != b.RussiaDirect || strings.Join(a.CorpDomains, ",") != strings.Join(b.CorpDomains, ",") ||
+		effectiveCategories(a.Categories) != effectiveCategories(b.Categories)
+}
+
+// effectiveCategories сводит категории к тому, что реально попадает в конфиг:
+// категории с направлением «auto» ничего не меняют, поэтому переключение
+// между «нет категории» и «auto» не должно вызывать переподключение.
+func effectiveCategories(cats []profile.Category) string {
+	var active []profile.Category
+	for _, c := range cats {
+		if c.Action != profile.ActionAuto {
+			c.Name = "" // название на конфиг не влияет
+			active = append(active, c)
+		}
+	}
+	data, _ := json.Marshal(active)
+	return string(data)
 }
 
 // ImportOVPN сохраняет .ovpn, подготовленный PrepareOVPN.
