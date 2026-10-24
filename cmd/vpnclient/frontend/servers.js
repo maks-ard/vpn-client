@@ -12,6 +12,10 @@ const countries = [
   ["JP", "Япония", /🇯🇵|\b(jp|japan|tokyo)\b|япони|токио/i],
   ["SG", "Сингапур", /🇸🇬|\b(sg|singapore)\b|сингапур/i],
   ["PL", "Польша", /🇵🇱|\b(pl|poland|warsaw)\b|польш|варшав/i],
+  ["RU", "Россия", /🇷🇺|\b(ru|russia|moscow)\b|росси|москв/i],
+  ["BR", "Бразилия", /🇧🇷|\b(br|brazil|sao paulo)\b|бразил/i],
+  ["LV", "Латвия", /🇱🇻|\b(lv|latvia|riga)\b|латви/i],
+  ["KZ", "Казахстан", /🇰🇿|\b(kz|kazakhstan|almaty|astana)\b|казахстан|алмат|астан/i],
 ];
 
 export function serverLabels(servers) {
@@ -24,7 +28,11 @@ export function serverLabels(servers) {
     const cities = [[/amsterdam|амстердам/i, "Амстердам"], [/frankfurt|франкфурт/i, "Франкфурт"], [/berlin|берлин/i, "Берлин"], [/helsinki|хельсинки/i, "Хельсинки"], [/paris|париж/i, "Париж"], [/london|лондон/i, "Лондон"], [/stockholm|стокгольм/i, "Стокгольм"], [/tokyo|токио/i, "Токио"]];
     const city = cities.find(([pattern]) => pattern.test(source))?.[1];
     const cleaned = source.replace(/\b(vless|reality|xtls|tcp|udp|grpc|ws|tls|vision)\b/gi, "").replace(/[|¦]+/g, " · ").replace(/\s+/g, " ").trim();
-    const label = country ? `${base}${city ? " · " + city : ""}` : (cleaned || "Узел без названия");
+    // Уточнения через «·» («Мост», «Hysteria») отличают точки входа одной
+    // страны: без них остались бы безликие «Германия · 1» и «Германия · 2».
+    const extras = country ? cleaned.split("·").slice(1).map(part => part.trim())
+      .filter(part => part && !country[2].test(part) && !cities.some(([pattern]) => pattern.test(part))) : [];
+    const label = country ? [base, city, ...extras].filter(Boolean).join(" · ") : (cleaned || "Узел без названия");
     return { ...server, label, code: country?.[0] || "", index: index + 1 };
   }).map((server, index, all) => {
     const duplicates = all.filter(s => s.label === server.label);
@@ -38,6 +46,8 @@ const stripes = {
   PL: ["#fff", "#dc143c"], FI: ["#fff"], SE: ["#006aa7"], CH: ["#d52b1e"],
   US: ["#b22234", "#fff", "#b22234", "#fff", "#b22234", "#fff", "#b22234"],
   GB: ["#012169"], SG: ["#ef3340", "#fff"],
+  RU: ["#fff", "#0039a6", "#d52b1e"], LV: ["#9e3039", "#9e3039", "#fff", "#9e3039", "#9e3039"],
+  KZ: ["#00afca"], BR: ["#009c3b"],
 };
 
 // Локальная SVG-иконка, код страны не зависит от поддержки emoji в Windows.
@@ -62,5 +72,7 @@ export function serverIcon(code = "") {
   if (code === "GB") svg.innerHTML += '<path d="M0 2l32 20M32 2L0 22" stroke="#fff" stroke-width="5"/><path d="M0 2l32 20M32 2L0 22" stroke="#c8102e" stroke-width="2"/>' + cross("#fff", 8, 16) + cross("#c8102e", 4, 16);
   if (code === "US") svg.innerHTML += '<rect x="0" y="2" width="14" height="11" fill="#3c3b6e"/><path d="M3 5h1m3 0h1m3 0h1M3 8h1m3 0h1m3 0h1" stroke="#fff" stroke-width="1.5"/>';
   if (code === "TR" || code === "SG") svg.innerHTML += `<circle cx="10" cy="${code === "SG" ? 7 : 12}" r="${code === "SG" ? 4 : 6}" fill="#fff"/><circle cx="12" cy="${code === "SG" ? 6 : 11}" r="${code === "SG" ? 3.4 : 5}" fill="${colors[0]}"/>`;
+  if (code === "KZ") svg.innerHTML += '<circle cx="16" cy="11" r="4" fill="#fec50c"/>';
+  if (code === "BR") svg.innerHTML += '<path d="M16 4l13 8-13 8-13-8z" fill="#fedf00"/><circle cx="16" cy="12" r="4.5" fill="#002776"/>';
   return svg;
 }

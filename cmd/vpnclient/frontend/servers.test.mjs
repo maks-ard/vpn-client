@@ -11,4 +11,8 @@ assert.equal(result[0].code, "NL");
 assert.equal(result[2].code, "");
 assert.equal(serverLabels([{name:"DE_Frankfurt_REALITY"}])[0].label, "Германия · Франкфурт");
 assert.equal(serverLabels([{name:"Мой быстрый узел"}])[0].label, "Мой быстрый узел");
+// Записи Remnawave: страна и уточнение точки входа.
+const remna = serverLabels(["🇩🇪 Германия", "🇩🇪 Германия · Мост", "🇳🇱 Нидерланды · Hysteria", "🇰🇿 Казахстан · Мост", "🇷🇺 Россия", "🇩🇪 Германия · Франкфурт"].map(name => ({ name })));
+assert.deepEqual(remna.map(s => s.label), ["Германия", "Германия · Мост", "Нидерланды · Hysteria", "Казахстан · Мост", "Россия", "Германия · Франкфурт"]);
+assert.deepEqual(remna.map(s => s.code), ["DE", "DE", "NL", "KZ", "RU", "DE"]);
 console.log("PASS: названия, дубликаты, неизвестная и неоднозначная география, сохранение ID");
