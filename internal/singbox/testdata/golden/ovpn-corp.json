@@ -1,0 +1,145 @@
+{
+  "dns": {
+    "final": "dns-direct",
+    "rules": [
+      {
+        "domain_suffix": [
+          "corp.example.com"
+        ],
+        "server": "dns-corp"
+      },
+      {
+        "preferred_by": [
+          "dns-corp"
+        ],
+        "server": "dns-corp"
+      }
+    ],
+    "servers": [
+      {
+        "server": "77.88.8.8",
+        "tag": "dns-direct",
+        "type": "udp"
+      },
+      {
+        "accept_default_resolvers": true,
+        "accept_search_domain": true,
+        "endpoint": "corp",
+        "tag": "dns-corp",
+        "type": "openvpn"
+      }
+    ],
+    "strategy": "ipv4_only"
+  },
+  "endpoints": [
+    {
+      "auth": "SHA256",
+      "data_ciphers": [
+        "AES-256-GCM",
+        "AES-128-GCM"
+      ],
+      "data_ciphers_fallback": "AES-256-CBC",
+      "network": "udp",
+      "password": "p",
+      "ping_interval": "10s",
+      "ping_restart": "60s",
+      "pull_filters": [
+        {
+          "action": "ignore",
+          "text": "redirect-gateway"
+        },
+        {
+          "action": "ignore",
+          "text": "block-outside-dns"
+        }
+      ],
+      "servers": [
+        {
+          "server": "vpn.example.com",
+          "server_port": 1194
+        },
+        {
+          "network": "tcp",
+          "server": "203.0.113.10",
+          "server_port": 443
+        }
+      ],
+      "tag": "corp",
+      "tls": {
+        "certificate": "-----BEGIN CERTIFICATE-----\nMIIBejCCAR+gAwIBAgIUd/bSZoFz2ND3okdn60YK5oGWfBIwCgYIKoZIzj0EAwIw\nEjEQMA4GA1UEAwwHVGVzdCBDQTAeFw0yNjEwMjEyMDU4NDdaFw0zNjEwMTgyMDU4\nNDdaMBIxEDAOBgNVBAMMB1Rlc3QgQ0EwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNC\nAARBzhgTZ19X1bQ0F7DZZxsntL91MqANL7F3P8cGEg2zZHE2t45zCUa+4BwYo9rF\nsrVLW/WiVMQ0xuesO7iG2hJGo1MwUTAdBgNVHQ4EFgQUwQOnwSirRj0A9RIfaJdz\nhEDvXHQwHwYDVR0jBBgwFoAUwQOnwSirRj0A9RIfaJdzhEDvXHQwDwYDVR0TAQH/\nBAUwAwEB/zAKBggqhkjOPQQDAgNJADBGAiEA6sbB8dKMFL5nvezJxr5ycuyPRUok\nrLVFwESlXD95qogCIQDBh7oOtZEQXSXwwDdygKzQVI4fPPFVbpSGslMwB+fK1A==\n-----END CERTIFICATE-----\n",
+        "client_certificate": "-----BEGIN CERTIFICATE-----\nMIIBHjCBxAIUT+JkySvQc7obi9asn/CCv6mk9c0wCgYIKoZIzj0EAwIwEjEQMA4G\nA1UEAwwHVGVzdCBDQTAeFw0yNjEwMjEyMDU4NDdaFw0zNjEwMTgyMDU4NDdaMBEx\nDzANBgNVBAMMBmNsaWVudDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABDUBmB6e\n/SyWP+HKzarF+uw7Cw3INHIf7khkSwGO7WsoS8HiflT2RsqfvvOcBOiQDpHy7ZV8\nTg70AHEY5Kv/GuEwCgYIKoZIzj0EAwIDSQAwRgIhAKy4/rfro0cbV+g5LqBWzY+J\n8X21wZEnbNmFXVS3AnK2AiEApBtfspRr//5btl3HadyAwLqlac+PrJNgZYpYhE4z\nFeQ=\n-----END CERTIFICATE-----\n",
+        "client_key": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg7kWqYqNJZYKEcETa\n6yf7ky1+Jo99kEC7Midqg8NSHFehRANCAAQ1AZgenv0slj/hys2qxfrsOwsNyDRy\nH+5IZEsBju1rKEvB4n5U9kbKn77znATokA6R8u2VfE4O9ABxGOSr/xrh\n-----END PRIVATE KEY-----\n",
+        "control_wrap": {
+          "direction": "client",
+          "key": "-----BEGIN OpenVPN Static key V1-----\n49c0b0294def6f4a6a2ac3a5d2ef341b\n6f35b1e618f4829137443f31fbf5976f\nc8747f206df3815e056e7f2e03b88559\n768649f0e918d3a08556a4615cad024a\n644378fd2f3c782780052c432ad52a5a\n65b24b28c77062edf3390869595f251a\nef81080f626c14665d002fb93a33bca5\n5cbabfeb09b7c34326a9f105db602919\naa7e40344c00c302fb62891c239deb89\nbaa23398757ccea36c03ad62f24920d5\nb68a1579168c900af20c2e3610fa69e3\n17a9e204080db934c04a5f70f130535e\n7995b6ffa1c8b345be251ce040f8972a\n8ea94ee6efa534049bb1f0f5b2feb488\n48e441af06994c90d211699f1ef470cf\n5b9165bbe8650d1166e34b5e170958b1\n-----END OpenVPN Static key V1-----\n",
+          "type": "tls_auth"
+        },
+        "remote_certificate_tls": "server",
+        "server_name": "vpn server",
+        "server_name_type": "name"
+      },
+      "type": "openvpn-client",
+      "username": "u"
+    }
+  ],
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "path": "cache.db"
+    }
+  },
+  "inbounds": [
+    {
+      "address": [
+        "172.19.0.1/30"
+      ],
+      "auto_route": true,
+      "interface_name": "vpn-client",
+      "mtu": 9000,
+      "stack": "mixed",
+      "strict_route": true,
+      "tag": "tun-in",
+      "type": "tun"
+    }
+  ],
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "tag": "direct",
+      "type": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": "dns-direct",
+    "final": "direct",
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "action": "hijack-dns",
+        "protocol": "dns"
+      },
+      {
+        "domain_suffix": [
+          "corp.example.com"
+        ],
+        "outbound": "corp"
+      },
+      {
+        "outbound": "corp",
+        "preferred_by": [
+          "corp"
+        ]
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      }
+    ]
+  }
+}
