@@ -3,6 +3,8 @@ package singbox
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -270,5 +272,72 @@ func TestSingBoxCheckCategories(t *testing.T) {
 	_, data = buildMap(t, categoryInput(t, categoriesYAML, true, false))
 	singBoxCheck(t, exe, data)
 	_, data = buildMap(t, categoryInput(t, categoriesYAML, false, true))
+	singBoxCheck(t, exe, data)
+}
+
+// С LocalSets категории подключают наборы файлами, а недоступный набор
+// пропускается с предупреждением, не ломая запуск.
+func TestCategoriesLocalSets(t *testing.T) {
+	const yaml = "routing:\n  russia_direct: false\n  categories:\n    - {id: social, preset: true, action: proxy}\n    - {id: ads, preset: true, action: block}\n"
+	in := categoryInput(t, yaml, true, false)
+	in.LocalSets = map[string]string{}
+	for _, ref := range in.CategorySets() {
+		if strings.Contains(ref.Tag, "telegram") || strings.Contains(ref.Tag, "instagram") {
+			in.LocalSets[ref.Tag] = "/data/rule-sets/" + ref.Tag + ".srs"
+		}
+	}
+	cfg, data := buildMap(t, in)
+	route := cfg["route"].(M)
+	local := map[string]string{}
+	for _, s := range route["rule_set"].([]any) {
+		set := s.(M)
+		if set["type"] != "local" || set["url"] != nil {
+			t.Errorf("ожидался local без url: %v", set)
+		}
+		local[set["tag"].(string)] = set["path"].(string)
+	}
+	if len(local) != 2 || local["geosite-telegram"] != "/data/rule-sets/geosite-telegram.srs" {
+		t.Errorf("наборы: %v", local)
+	}
+	// Без remote-наборов http-клиент для скачивания не нужен.
+	if route["default_http_client"] != nil || cfg["http_clients"] != nil {
+		t.Error("для локальных наборов http-клиент не нужен")
+	}
+	// Категория без единого доступного набора пропущена целиком.
+	if strings.Contains(string(data), "category-ads-all") {
+		t.Error("недоступный набор попал в конфиг")
+	}
+	warn := strings.Join(in.Warnings(), "\n")
+	if !strings.Contains(warn, "geosite-category-ads-all недоступен") || strings.Contains(warn, "telegram") {
+		t.Errorf("предупреждения: %q", warn)
+	}
+	// Без LocalSets всё по-прежнему remote (vpnctl, эталоны).
+	in.LocalSets = nil
+	cfg, _ = buildMap(t, in)
+	if cfg["route"].(M)["rule_set"].([]any)[0].(M)["type"] != "remote" {
+		t.Error("без LocalSets наборы должны быть remote")
+	}
+}
+
+func TestSingBoxCheckLocalSets(t *testing.T) {
+	exe := os.Getenv("VPNCLIENT_SINGBOX")
+	if exe == "" {
+		t.Skip("VPNCLIENT_SINGBOX не задан")
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "set.json")
+	if err := os.WriteFile(src, []byte(`{"version":3,"rules":[{"domain_suffix":["example.net"]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srs := filepath.Join(dir, "set.srs")
+	if out, err := exec.Command(exe, "rule-set", "compile", "--output", srs, src).CombinedOutput(); err != nil {
+		t.Fatalf("compile: %v\n%s", err, out)
+	}
+	in := categoryInput(t, categoriesYAML, true, true)
+	in.LocalSets = map[string]string{}
+	for _, ref := range in.CategorySets() {
+		in.LocalSets[ref.Tag] = srs
+	}
+	_, data := buildMap(t, in)
 	singBoxCheck(t, exe, data)
 }

@@ -435,25 +435,28 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 	if err != nil {
 		return err
 	}
-	for _, w := range in.Warnings() {
-		m.log.Printf("предупреждение: %s", w)
-	}
 	addr, err := freeLocalAddr()
 	if err != nil {
 		return err
 	}
 	in.API = &singbox.API{Addr: addr, Secret: randomHex(16)}
 	in.Inbound = m.inbound
-	config, err := singbox.Build(in)
-	if err != nil {
-		return err
-	}
 
 	exe, release, err := m.singBox()
 	if err != nil {
 		return err
 	}
 	defer release()
+	// Наборы категорий скачиваются и проверяются заранее: недоступная ссылка
+	// на набор не должна мешать запуску sing-box.
+	in.LocalSets = m.prepareRuleSets(ctx, exe, in)
+	for _, w := range in.Warnings() {
+		m.log.Printf("предупреждение: %s", w)
+	}
+	config, err := singbox.Build(in)
+	if err != nil {
+		return err
+	}
 
 	api := newClash(in.API.Addr, in.API.Secret)
 	m.update(func(s *State) {

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/maks-ard/vpn-client/internal/singbox"
@@ -21,6 +22,8 @@ const (
 	// ruleSetMaxAge — как долго файл rule-set считается свежим, как у update_interval в конфиге.
 	ruleSetMaxAge  = 72 * time.Hour
 	ruleSetMaxSize = 16 << 20
+	// ruleSetPrepareTimeout — сколько подключение ждёт скачивания наборов категорий.
+	ruleSetPrepareTimeout = 25 * time.Second
 )
 
 // Explain говорит, куда пойдёт трафик к адресу при переданных настройках
@@ -52,7 +55,7 @@ func (m *Manager) setMatcher(ctx context.Context, exe string) singbox.SetMatcher
 		if url == "" {
 			return false, fmt.Errorf("неизвестный набор %s", tag)
 		}
-		path, err := m.ruleSetFile(ctx, url)
+		path, err := m.ruleSetFile(ctx, exe, url)
 		if err != nil {
 			return false, err
 		}
@@ -71,9 +74,10 @@ func (m *Manager) setMatcher(ctx context.Context, exe string) singbox.SetMatcher
 }
 
 // ruleSetFile возвращает путь к локальной копии rule-set, скачивая её при
-// отсутствии или устаревании. Если обновить не вышло, а старая копия есть,
-// берётся она.
-func (m *Manager) ruleSetFile(ctx context.Context, url string) (string, error) {
+// отсутствии или устаревании. Скачанное проверяется самим sing-box (exe), чтобы
+// страница-заглушка вместо .srs не попала в конфиг и не сломала запуск. Если
+// обновить не вышло, а старая копия есть, берётся она.
+func (m *Manager) ruleSetFile(ctx context.Context, exe, url string) (string, error) {
 	sum := sha256.Sum256([]byte(url))
 	path := filepath.Join(m.paths.Data, "rule-sets", hex.EncodeToString(sum[:8])+".srs")
 	info, statErr := os.Stat(path)
@@ -85,16 +89,82 @@ func (m *Manager) ruleSetFile(ctx context.Context, url string) (string, error) {
 		fetch = httpFetchSet
 	}
 	data, err := fetch(ctx, url)
+	if err == nil {
+		err = validateRuleSet(ctx, exe, data, filepath.Dir(path))
+	}
 	if err != nil {
 		if statErr == nil {
 			return path, nil
 		}
-		return "", fmt.Errorf("не удалось скачать набор: %w", err)
+		return "", fmt.Errorf("не удалось получить набор: %w", err)
 	}
 	if err := writeFileAtomic(path, data); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// validateRuleSet просит sing-box открыть набор: если файл не rule-set, команда
+// завершится с ошибкой. Без exe проверка пропускается.
+func validateRuleSet(ctx context.Context, exe string, data []byte, dir string) error {
+	if exe == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "check-*.srs")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(data)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	out, err := exec.CommandContext(ctx, exe, "rule-set", "match", "-f", "binary", tmp.Name(), "example.com").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("файл не похож на набор .srs: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// prepareRuleSets скачивает и проверяет наборы активных категорий до сборки
+// конфига. Набор, который получить не удалось, в результат не попадает, и
+// категория пропускается с предупреждением. Подключение из-за этого не
+// откладывается дольше ruleSetPrepareTimeout.
+func (m *Manager) prepareRuleSets(ctx context.Context, exe string, in *singbox.Input) map[string]string {
+	paths := map[string]string{}
+	refs := in.CategorySets()
+	if len(refs) == 0 {
+		return paths
+	}
+	ctx, cancel := context.WithTimeout(ctx, ruleSetPrepareTimeout)
+	defer cancel()
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for _, ref := range refs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			path, err := m.ruleSetFile(ctx, exe, ref.URL)
+			if err != nil {
+				m.log.Printf("набор %s: %v", ref.Tag, err)
+				return
+			}
+			mu.Lock()
+			paths[ref.Tag] = path
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return paths
 }
 
 func httpFetchSet(ctx context.Context, url string) ([]byte, error) {

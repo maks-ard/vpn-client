@@ -58,6 +58,11 @@ type Input struct {
 	// API — включить Clash API (статистика, выбор сервера) на этом адресе.
 	// Если nil, используется singbox.clash_api из профиля.
 	API *API
+	// LocalSets — уже скачанные и проверенные файлы rule-set'ов категорий
+	// (тег → путь). Если задано, категории используют только их, а набор без
+	// файла пропускается с предупреждением: недоступная ссылка не должна
+	// мешать запуску sing-box. Если nil, наборы подключаются по ссылке.
+	LocalSets map[string]string
 	// Inbound заменяет TUN другим inbound (например, mixed): нужно для
 	// тестов, где нет прав на создание TUN.
 	Inbound M
@@ -318,7 +323,9 @@ func routeSection(in *Input, hasProxy, hasCorp bool, final string) M {
 	}
 	if sets := ruleSetDefs(in, cats); len(sets) > 0 {
 		route["rule_set"] = sets
-		route["default_http_client"] = "rule-sets"
+		if needRuleSets(in) {
+			route["default_http_client"] = "rule-sets"
+		}
 	}
 	route["rules"] = rules
 	return route
@@ -332,7 +339,15 @@ func useRuleSets(in *Input) bool {
 
 // needRuleSets: нужны ли вообще скачиваемые rule-set'ы (для России или категорий).
 func needRuleSets(in *Input) bool {
-	return useRuleSets(in) || len(resolveCategories(in).sets) > 0
+	if useRuleSets(in) {
+		return true
+	}
+	for _, s := range resolveCategories(in).sets {
+		if s.path == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func ruleSetDefsRaw(in *Input, cats resolved) []ruleSetDef {
@@ -349,6 +364,10 @@ func ruleSetDefsRaw(in *Input, cats resolved) []ruleSetDef {
 func ruleSetDefs(in *Input, cats resolved) []any {
 	var out []any
 	for _, d := range ruleSetDefsRaw(in, cats) {
+		if d.path != "" {
+			out = append(out, M{"type": "local", "tag": d.tag, "format": "binary", "path": d.path})
+			continue
+		}
 		out = append(out, M{
 			"type":            "remote",
 			"tag":             d.tag,

@@ -44,7 +44,24 @@ func presetByID(id string) (Preset, bool) {
 
 const geositeURL = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-%s.srs"
 
-type ruleSetDef struct{ tag, url string }
+// ruleSetDef — rule-set в конфиге: remote (url) или local (path).
+type ruleSetDef struct{ tag, url, path string }
+
+// SetRef — rule-set, который нужен категориям: что скачать до сборки конфига.
+type SetRef struct{ Tag, URL string }
+
+// CategorySets перечисляет rule-set'ы активных категорий. Приложение скачивает
+// их заранее и передаёт пути в Input.LocalSets.
+func (in *Input) CategorySets() []SetRef {
+	saved := in.LocalSets
+	in.LocalSets = nil
+	defer func() { in.LocalSets = saved }()
+	var out []SetRef
+	for _, s := range resolveCategories(in).sets {
+		out = append(out, SetRef{Tag: s.tag, URL: s.url})
+	}
+	return out
+}
 
 // resolvedCategory — категория, разобранная под конкретный набор подключений.
 type resolvedCategory struct {
@@ -71,11 +88,26 @@ func resolveCategories(in *Input) resolved {
 	hasProxy := len(in.Servers) > 0
 	hasCorp := in.OpenVPN != nil
 	seenSets := map[string]bool{}
-	addSet := func(tag, url string) {
+	missing := map[string]bool{}
+	// addSet регистрирует набор и говорит, можно ли на него ссылаться.
+	addSet := func(tag, url string) bool {
+		def := ruleSetDef{tag: tag, url: url}
+		if in.LocalSets != nil {
+			path, ok := in.LocalSets[tag]
+			if !ok {
+				if !missing[tag] {
+					missing[tag] = true
+					out.warnings = append(out.warnings, fmt.Sprintf("набор %s недоступен и пропущен", tag))
+				}
+				return false
+			}
+			def.path = path
+		}
 		if !seenSets[tag] {
 			seenSets[tag] = true
-			out.sets = append(out.sets, ruleSetDef{tag: tag, url: url})
+			out.sets = append(out.sets, def)
 		}
+		return true
 	}
 
 	for _, c := range in.Profile.Routing.Categories {
@@ -95,9 +127,10 @@ func resolveCategories(in *Input) resolved {
 			rc.title = title
 			for _, name := range p.Sets {
 				tag := "geosite-" + name
-				addSet(tag, fmt.Sprintf(geositeURL, name))
-				rc.sets = append(rc.sets, tag)
-				rc.domainSets = append(rc.domainSets, tag)
+				if addSet(tag, fmt.Sprintf(geositeURL, name)) {
+					rc.sets = append(rc.sets, tag)
+					rc.domainSets = append(rc.domainSets, tag)
+				}
 			}
 		} else {
 			for _, r := range c.Rules {
@@ -113,8 +146,9 @@ func resolveCategories(in *Input) resolved {
 				case profile.RuleSet:
 					sum := sha256.Sum256([]byte(r.Value))
 					tag := "user-" + hex.EncodeToString(sum[:5])
-					addSet(tag, r.Value)
-					rc.sets = append(rc.sets, tag)
+					if addSet(tag, r.Value) {
+						rc.sets = append(rc.sets, tag)
+					}
 				}
 			}
 		}

@@ -103,6 +103,12 @@ Wails импортирует только `cmd/vpnclient`: `internal/app` тес
   `raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/`) и свои. Направление
   `auto` не добавляет в конфиг ничего. Категория, которой некуда направлять трафик
   (нет OpenVPN или VLESS), пропускается с замечанием, а не ломает подключение.
+- Недоступный remote rule-set роняет sing-box при старте (`FATAL initialize rule-set`),
+  и VPN не поднимается вовсе. Поэтому приложение скачивает наборы категорий заранее,
+  проверяет их самим sing-box (`rule-set match`) и передаёт в `Input.LocalSets`; набор,
+  который получить не удалось, пропускается с предупреждением. Из приложения не клади
+  в конфиг remote-ссылки на наборы категорий. Для `vpnctl` и тестов (`LocalSets == nil`)
+  остаются remote.
 - Конфиг без категорий не должен меняться ни на байт: это держат
   `TestGoldenLegacyRouting` (эталоны в `internal/singbox/testdata/golden`) и
   `TestLegacySettingsKeepRouting`. Эталоны обновляй (`UPDATE_GOLDEN=1`) только
