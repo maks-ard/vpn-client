@@ -35,6 +35,22 @@ routing:
   direct_domains: []       # всегда напрямую
   proxy_domains: []        # всегда через VLESS, даже если домен российский
   direct_processes: []     # программы мимо VPN, например: [qbittorrent.exe]
+  # Категории: готовые (preset: true, id из каталога: gov-bank-ru, ads, video,
+  # social, ai, dev, games) и свои. Проверяются сверху вниз; направленные в
+  # corp всегда выше частных сетей. Уступают proxy_domains и direct_domains,
+  # приоритетнее российских правил.
+  # action: auto | corp (OpenVPN) | proxy (VLESS) | direct | block
+  # Типы правил своей категории: domain (с поддоменами), keyword (любой адрес,
+  # где есть эта строка), cidr, process, ruleset (https-ссылка на .srs).
+  categories: []
+  #  - {id: ads, preset: true, action: block}
+  #  - {id: social, preset: true, action: proxy}
+  #  - id: work
+  #    name: Рабочие инструменты
+  #    action: direct
+  #    rules:
+  #      - {type: domain, value: figma.com}
+  #      - {type: process, value: zoom.exe}
 
 dns:
   direct: 77.88.8.8        # для российских доменов, напрямую

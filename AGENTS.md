@@ -93,9 +93,20 @@ Wails импортирует только `cmd/vpnclient`: `internal/app` тес
   Новые поля сверяй с документацией в модуле
   (`$(go env GOMODCACHE)/github.com/sagernet/sing-box@v1.14.3/docs/`), а не по памяти.
 - Любое изменение генератора проверяй через `TestSingBoxCheck` с настоящим sing-box.
-- Порядок правил маршрутизации важен: корпоративное → частные сети → процессы →
-  `proxy_domains` → `direct_domains` → российские → `final`. Тесты в
-  `internal/singbox/config_test.go` фиксируют этот порядок, держи их в актуальном состоянии.
+- Порядок правил маршрутизации важен: корпоративное → категории с направлением
+  «OpenVPN» → частные сети → процессы → `proxy_domains` → `direct_domains` →
+  остальные категории (в порядке списка) → российские → `final`. Тесты в
+  `internal/singbox/config_test.go` и `categories_test.go` фиксируют этот порядок,
+  держи их в актуальном состоянии.
+- Категории (`routing.categories`, в GUI «Правила») — готовые из каталога
+  `singbox.Presets()` (наборы sing-geosite, имена сверяй запросом к
+  `raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/`) и свои. Направление
+  `auto` не добавляет в конфиг ничего. Категория, которой некуда направлять трафик
+  (нет OpenVPN или VLESS), пропускается с замечанием, а не ломает подключение.
+- Конфиг без категорий не должен меняться ни на байт: это держат
+  `TestGoldenLegacyRouting` (эталоны в `internal/singbox/testdata/golden`) и
+  `TestLegacySettingsKeepRouting`. Эталоны обновляй (`UPDATE_GOLDEN=1`) только
+  если поведение меняется осознанно, и скажи об этом в коммите.
 - Без VLESS в конфиге не должно оставаться ссылок на тег `proxy`; без OpenVPN — на `corp`.
 - Скачивание rule-set'ов не должно зависеть от VLESS, иначе при недоступном VLESS
   не поднимется и корпоративный доступ.

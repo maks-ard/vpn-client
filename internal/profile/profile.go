@@ -64,6 +64,10 @@ type Routing struct {
 	ProxyDomains []string `yaml:"proxy_domains"`
 	// DirectProcesses — программы, чей трафик идёт напрямую (например, торрент-клиент).
 	DirectProcesses []string `yaml:"direct_processes"`
+	// Categories — готовые и свои категории с направлением. Проверяются сверху
+	// вниз, но направленные в OpenVPN всегда выше частных сетей. Приоритетнее
+	// российских правил и остального трафика, уступают proxy_domains и direct_domains.
+	Categories []Category `yaml:"categories"`
 }
 
 type DNS struct {
@@ -182,6 +186,11 @@ func (p *Profile) validate() error {
 			return fmt.Errorf("corporate.subnets: %w", err)
 		}
 	}
+	cats, err := NormalizeCategories(p.Routing.Categories)
+	if err != nil {
+		return fmt.Errorf("routing.categories: %w", err)
+	}
+	p.Routing.Categories = cats
 	switch p.TUN.Stack {
 	case "system", "gvisor", "mixed":
 	default:

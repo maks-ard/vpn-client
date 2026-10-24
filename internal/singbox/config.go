@@ -125,6 +125,9 @@ func (in *Input) Warnings() []string {
 			w = append(w, "подписка: пропущен сервер: "+s)
 		}
 	}
+	for _, s := range resolveCategories(in).warnings {
+		w = append(w, "категории: "+s)
+	}
 	if in.OpenVPN == nil {
 		return w
 	}
@@ -192,7 +195,7 @@ func build(in *Input) (M, error) {
 	if len(endpoints) > 0 {
 		cfg["endpoints"] = endpoints
 	}
-	if useRuleSets(in) {
+	if needRuleSets(in) {
 		// Правила качаем напрямую: если VLESS недоступен, корпоративный доступ
 		// и прямой трафик всё равно должны подняться. После первой загрузки
 		// правила берутся из cache.db.
@@ -229,6 +232,7 @@ func tunInbound(p *profile.Profile) M {
 
 func routeSection(in *Input, hasProxy, hasCorp bool, final string) M {
 	p := in.Profile
+	cats := resolveCategories(in)
 	rules := []any{
 		M{"action": "sniff"},
 		M{"protocol": "dns", "action": "hijack-dns"},
@@ -243,6 +247,8 @@ func routeSection(in *Input, hasProxy, hasCorp bool, final string) M {
 			rules = append(rules, M{"ip_cidr": p.Corporate.Subnets, "outbound": TagCorp})
 		}
 	}
+	// Категории, направленные в OpenVPN, тоже выше частных сетей.
+	rules = append(rules, cats.routeRules(true)...)
 	rules = append(rules, M{"ip_is_private": true, "outbound": TagDirect})
 	if len(p.Routing.DirectProcesses) > 0 {
 		rules = append(rules, M{"process_name": p.Routing.DirectProcesses, "outbound": TagDirect})
@@ -253,6 +259,7 @@ func routeSection(in *Input, hasProxy, hasCorp bool, final string) M {
 	if len(p.Routing.DirectDomains) > 0 {
 		rules = append(rules, M{"domain_suffix": p.Routing.DirectDomains, "outbound": TagDirect})
 	}
+	rules = append(rules, cats.routeRules(false)...)
 	route := M{
 		"final":                   final,
 		"auto_detect_interface":   true,
@@ -263,7 +270,9 @@ func routeSection(in *Input, hasProxy, hasCorp bool, final string) M {
 			M{"domain_suffix": russianTLDs, "outbound": TagDirect},
 			M{"rule_set": []string{ruleSetGeositeRU, ruleSetGeoIPRU}, "outbound": TagDirect},
 		)
-		route["rule_set"] = ruleSets()
+	}
+	if sets := ruleSetDefs(in, cats); len(sets) > 0 {
+		route["rule_set"] = sets
 		route["default_http_client"] = "rule-sets"
 	}
 	route["rules"] = rules
@@ -276,14 +285,27 @@ func useRuleSets(in *Input) bool {
 	return len(in.Servers) > 0 && in.Profile.RussiaDirect()
 }
 
-func ruleSets() []any {
+// needRuleSets: нужны ли вообще скачиваемые rule-set'ы (для России или категорий).
+func needRuleSets(in *Input) bool {
+	return useRuleSets(in) || len(resolveCategories(in).sets) > 0
+}
+
+// ruleSetDefs — все rule-set'ы конфига: для России, затем для категорий.
+func ruleSetDefs(in *Input, cats resolved) []any {
+	var defs []ruleSetDef
+	if useRuleSets(in) {
+		for _, tag := range []string{ruleSetGeositeRU, ruleSetGeoIPRU} {
+			defs = append(defs, ruleSetDef{tag: tag, url: ruleSetURLs[tag]})
+		}
+	}
+	defs = append(defs, cats.sets...)
 	var out []any
-	for _, tag := range []string{ruleSetGeositeRU, ruleSetGeoIPRU} {
+	for _, d := range defs {
 		out = append(out, M{
 			"type":            "remote",
-			"tag":             tag,
+			"tag":             d.tag,
 			"format":          "binary",
-			"url":             ruleSetURLs[tag],
+			"url":             d.url,
 			"update_interval": "72h",
 		})
 	}
@@ -292,6 +314,7 @@ func ruleSets() []any {
 
 func dnsSection(in *Input, hasProxy, hasCorp bool) (M, error) {
 	p := in.Profile
+	cats := resolveCategories(in)
 	servers := []any{M{"type": "udp", "tag": TagDNSDirect, "server": p.DNS.Direct}}
 	var rules []any
 	final := TagDNSDirect
@@ -318,6 +341,7 @@ func dnsSection(in *Input, hasProxy, hasCorp bool) (M, error) {
 			rules = append(rules, M{"domain_suffix": p.Corporate.Domains, "server": TagDNSCorp})
 		}
 		rules = append(rules, M{"preferred_by": []string{TagDNSCorp}, "server": TagDNSCorp})
+		rules = append(rules, cats.dnsRules(true)...)
 	}
 	if hasProxy && len(p.Routing.ProxyDomains) > 0 {
 		rules = append(rules, M{"domain_suffix": p.Routing.ProxyDomains, "server": TagDNSRemote})
@@ -325,6 +349,7 @@ func dnsSection(in *Input, hasProxy, hasCorp bool) (M, error) {
 	if len(p.Routing.DirectDomains) > 0 {
 		rules = append(rules, M{"domain_suffix": p.Routing.DirectDomains, "server": TagDNSDirect})
 	}
+	rules = append(rules, cats.dnsRules(false)...)
 	if useRuleSets(in) {
 		rules = append(rules,
 			M{"domain_suffix": russianTLDs, "server": TagDNSDirect},
