@@ -105,6 +105,33 @@ func FromProfile(ctx context.Context, p *profile.Profile, dataDir string) (*Inpu
 	return in, nil
 }
 
+// FromProfileOffline — то же, что FromProfile, но подписку берёт из кэша и в
+// сеть не ходит. Если кэша нет, серверов в результате не будет. Нужен для
+// проверки адреса, которой незачем качать подписку.
+func FromProfileOffline(p *profile.Profile, dataDir string) (*Input, error) {
+	in := &Input{Profile: p}
+	switch {
+	case p.VLESS != "":
+		link, err := vless.Parse(p.VLESS)
+		if err != nil {
+			return nil, fmt.Errorf("vless: %w", err)
+		}
+		in.Servers = []subscription.Server{{Name: link.Name, Links: []*vless.Link{link}}}
+	case p.Subscription != nil:
+		if sub, err := subscription.Cached(dataDir); err == nil {
+			in.Subscription = sub
+			in.Servers = sub.Servers
+		}
+	}
+	if p.OpenVPN != nil {
+		var err error
+		if in.OpenVPN, err = loadOVPN(p); err != nil {
+			return nil, err
+		}
+	}
+	return in, nil
+}
+
 func loadOVPN(p *profile.Profile) (*ovpn.Config, error) {
 	c, err := ovpn.ParseFile(p.Resolve(p.OpenVPN.Config))
 	if err != nil {
@@ -230,46 +257,64 @@ func tunInbound(p *profile.Profile) M {
 	}
 }
 
-func routeSection(in *Input, hasProxy, hasCorp bool, final string) M {
+// labeledRule — правило маршрутов и его происхождение. Подпись нужна проверке
+// адреса («сработало правило …»); в конфиг она не попадает.
+type labeledRule struct {
+	rule  M
+	label string
+}
+
+// routeRuleList — правила, которые проверяются по порядку после sniff и
+// перехвата DNS. И конфиг, и проверка адреса берут их отсюда, поэтому
+// расходиться не могут.
+func routeRuleList(in *Input, cats resolved, hasProxy, hasCorp bool) []labeledRule {
 	p := in.Profile
+	var rules []labeledRule
+	add := func(label string, rule M) { rules = append(rules, labeledRule{rule: rule, label: label}) }
+
+	if hasCorp {
+		if len(p.Corporate.Domains) > 0 {
+			add("корпоративные домены", M{"domain_suffix": p.Corporate.Domains, "outbound": TagCorp})
+		}
+		// Подсети и домены, которые прислал сервер OpenVPN.
+		add("маршруты от сервера OpenVPN", M{"preferred_by": []string{TagCorp}, "outbound": TagCorp})
+		if len(p.Corporate.Subnets) > 0 {
+			add("корпоративные подсети", M{"ip_cidr": p.Corporate.Subnets, "outbound": TagCorp})
+		}
+	}
+	// Категории, направленные в OpenVPN, тоже выше частных сетей.
+	rules = append(rules, cats.routeRules(true)...)
+	add("локальная сеть", M{"ip_is_private": true, "outbound": TagDirect})
+	if len(p.Routing.DirectProcesses) > 0 {
+		add("программа из direct_processes", M{"process_name": p.Routing.DirectProcesses, "outbound": TagDirect})
+	}
+	if hasProxy && len(p.Routing.ProxyDomains) > 0 {
+		add("список proxy_domains", M{"domain_suffix": p.Routing.ProxyDomains, "outbound": TagProxy})
+	}
+	if len(p.Routing.DirectDomains) > 0 {
+		add("список direct_domains", M{"domain_suffix": p.Routing.DirectDomains, "outbound": TagDirect})
+	}
+	rules = append(rules, cats.routeRules(false)...)
+	if useRuleSets(in) {
+		add("российские сайты", M{"domain_suffix": russianTLDs, "outbound": TagDirect})
+		add("российские сайты", M{"rule_set": []string{ruleSetGeositeRU, ruleSetGeoIPRU}, "outbound": TagDirect})
+	}
+	return rules
+}
+
+func routeSection(in *Input, hasProxy, hasCorp bool, final string) M {
 	cats := resolveCategories(in)
 	rules := []any{
 		M{"action": "sniff"},
 		M{"protocol": "dns", "action": "hijack-dns"},
 	}
-	if hasCorp {
-		if len(p.Corporate.Domains) > 0 {
-			rules = append(rules, M{"domain_suffix": p.Corporate.Domains, "outbound": TagCorp})
-		}
-		// Подсети и домены, которые прислал сервер OpenVPN.
-		rules = append(rules, M{"preferred_by": []string{TagCorp}, "outbound": TagCorp})
-		if len(p.Corporate.Subnets) > 0 {
-			rules = append(rules, M{"ip_cidr": p.Corporate.Subnets, "outbound": TagCorp})
-		}
+	for _, r := range routeRuleList(in, cats, hasProxy, hasCorp) {
+		rules = append(rules, r.rule)
 	}
-	// Категории, направленные в OpenVPN, тоже выше частных сетей.
-	rules = append(rules, cats.routeRules(true)...)
-	rules = append(rules, M{"ip_is_private": true, "outbound": TagDirect})
-	if len(p.Routing.DirectProcesses) > 0 {
-		rules = append(rules, M{"process_name": p.Routing.DirectProcesses, "outbound": TagDirect})
-	}
-	if hasProxy && len(p.Routing.ProxyDomains) > 0 {
-		rules = append(rules, M{"domain_suffix": p.Routing.ProxyDomains, "outbound": TagProxy})
-	}
-	if len(p.Routing.DirectDomains) > 0 {
-		rules = append(rules, M{"domain_suffix": p.Routing.DirectDomains, "outbound": TagDirect})
-	}
-	rules = append(rules, cats.routeRules(false)...)
 	route := M{
 		"final":                   final,
 		"auto_detect_interface":   true,
 		"default_domain_resolver": TagDNSDirect,
-	}
-	if useRuleSets(in) {
-		rules = append(rules,
-			M{"domain_suffix": russianTLDs, "outbound": TagDirect},
-			M{"rule_set": []string{ruleSetGeositeRU, ruleSetGeoIPRU}, "outbound": TagDirect},
-		)
 	}
 	if sets := ruleSetDefs(in, cats); len(sets) > 0 {
 		route["rule_set"] = sets
@@ -290,17 +335,20 @@ func needRuleSets(in *Input) bool {
 	return useRuleSets(in) || len(resolveCategories(in).sets) > 0
 }
 
-// ruleSetDefs — все rule-set'ы конфига: для России, затем для категорий.
-func ruleSetDefs(in *Input, cats resolved) []any {
+func ruleSetDefsRaw(in *Input, cats resolved) []ruleSetDef {
 	var defs []ruleSetDef
 	if useRuleSets(in) {
 		for _, tag := range []string{ruleSetGeositeRU, ruleSetGeoIPRU} {
 			defs = append(defs, ruleSetDef{tag: tag, url: ruleSetURLs[tag]})
 		}
 	}
-	defs = append(defs, cats.sets...)
+	return append(defs, cats.sets...)
+}
+
+// ruleSetDefs — все rule-set'ы конфига: для России, затем для категорий.
+func ruleSetDefs(in *Input, cats resolved) []any {
 	var out []any
-	for _, d := range defs {
+	for _, d := range ruleSetDefsRaw(in, cats) {
 		out = append(out, M{
 			"type":            "remote",
 			"tag":             d.tag,

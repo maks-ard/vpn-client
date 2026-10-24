@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/maks-ard/vpn-client/internal/app"
+	"github.com/maks-ard/vpn-client/internal/singbox"
 )
 
 // Info — версия службы: окно сравнивает её со своей, чтобы понять, нужно
@@ -48,6 +49,11 @@ type importRequest struct {
 
 type nameRequest struct {
 	Name string `json:"name"`
+}
+
+type explainRequest struct {
+	Settings app.Settings `json:"settings"`
+	Target   string       `json:"target"`
 }
 
 type errorResponse struct {
@@ -145,6 +151,15 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		reply(w, nil, s.m.SelectServer(req.Name))
+	})
+	mux.HandleFunc("POST /v1/explain", func(w http.ResponseWriter, r *http.Request) {
+		var req explainRequest
+		if err := decode(r, &req); err != nil {
+			reply(w, nil, err)
+			return
+		}
+		verdict, err := s.m.Explain(r.Context(), req.Settings, req.Target)
+		reply(w, verdict, err)
 	})
 	mux.HandleFunc("POST /v1/test-servers", func(w http.ResponseWriter, r *http.Request) {
 		s.m.TestServers()
@@ -353,6 +368,13 @@ func (c *Client) ImportOVPN(ctx context.Context, name string, data []byte) (app.
 
 func (c *Client) RemoveOVPN(ctx context.Context) error {
 	return c.do(ctx, http.MethodDelete, "/v1/ovpn", nil, nil)
+}
+
+// Explain спрашивает у службы, куда пойдёт трафик к адресу при данных настройках.
+func (c *Client) Explain(ctx context.Context, s app.Settings, target string) (singbox.Verdict, error) {
+	var v singbox.Verdict
+	err := c.do(ctx, http.MethodPost, "/v1/explain", explainRequest{Settings: s, Target: target}, &v)
+	return v, err
 }
 
 func (c *Client) SelectServer(ctx context.Context, name string) error {

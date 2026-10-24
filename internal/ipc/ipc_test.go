@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/maks-ard/vpn-client/internal/app"
+	"github.com/maks-ard/vpn-client/internal/profile"
 )
 
 func startServer(t *testing.T) (*Client, *app.Manager) {
@@ -72,6 +73,19 @@ func TestClientServer(t *testing.T) {
 	view, err := c.Settings(ctx)
 	if err != nil || view.Settings.Link != "https://sub.example.com/x" || m.Settings().Link != view.Settings.Link {
 		t.Fatalf("settings: %+v %v", view, err)
+	}
+
+	// Проверка адреса идёт по переданным (в том числе несохранённым) настройкам.
+	verdict, err := c.Explain(ctx, app.Settings{
+		Link: "vless://11111111-2222-3333-4444-555555555555@example.com:443?security=tls#t",
+		Categories: []profile.Category{{ID: "c-1", Name: "Дизайн", Action: profile.ActionDirect,
+			Rules: []profile.Rule{{Type: profile.RuleDomain, Value: "figma.com"}}}},
+	}, "https://www.figma.com/file/1")
+	if err != nil || verdict.Action != "direct" || !strings.Contains(verdict.Rule, "Дизайн") {
+		t.Fatalf("explain: %+v %v", verdict, err)
+	}
+	if _, err := c.Explain(ctx, app.Settings{Link: "ftp://x"}, "example.com"); err == nil {
+		t.Error("ошибка настроек должна дойти до окна")
 	}
 
 	ovpnData, _ := os.ReadFile("../singbox/testdata/corp.ovpn")

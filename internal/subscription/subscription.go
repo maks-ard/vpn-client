@@ -93,6 +93,21 @@ func Get(ctx context.Context, url, userAgent, cacheDir string) (*Subscription, e
 	return sub, nil
 }
 
+// Cached возвращает сохранённую копию подписки без обращения к сети.
+func Cached(cacheDir string) (*Subscription, error) {
+	c, err := load(filepath.Join(cacheDir, "subscription.json"))
+	if err != nil {
+		return nil, err
+	}
+	sub, err := Parse(c.Body, c.Header)
+	if err != nil {
+		return nil, err
+	}
+	sub.FetchedAt = c.FetchedAt
+	sub.FromCache = true
+	return sub, nil
+}
+
 // infoUserAgents — клиенты, которым панели отдают subscription-userinfo.
 // Remnawave, например, шлёт срок и трафик только известным ей приложениям, а
 // остальным (в том числе v2rayN) — нет, и в нашем окне пропадает дата.

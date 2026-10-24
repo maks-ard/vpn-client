@@ -89,6 +89,8 @@ type Manager struct {
 	inbound singbox.M
 	// singBoxPath — внешний sing-box вместо встроенного (для разработки).
 	singBoxPath string
+	// fetchSet скачивает rule-set для проверки адреса; в тестах подменяется.
+	fetchSet func(ctx context.Context, url string) ([]byte, error)
 
 	mu             sync.Mutex
 	maintenance    sync.Mutex

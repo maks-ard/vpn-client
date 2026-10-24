@@ -48,6 +48,8 @@ type ruleSetDef struct{ tag, url string }
 
 // resolvedCategory — категория, разобранная под конкретный набор подключений.
 type resolvedCategory struct {
+	// title — название для подписи правила в проверке адреса.
+	title                                      string
 	action                                     string
 	suffixes, keywords, cidrs, processes, sets []string
 	// domainSets — наборы, годные для DNS-правил: только домены. Наборы по
@@ -81,7 +83,7 @@ func resolveCategories(in *Input) resolved {
 			continue
 		}
 		title := c.Name
-		rc := resolvedCategory{action: c.Action}
+		rc := resolvedCategory{title: title, action: c.Action}
 
 		if c.Preset {
 			p, ok := presetByID(c.ID)
@@ -90,6 +92,7 @@ func resolveCategories(in *Input) resolved {
 				continue
 			}
 			title = p.Title
+			rc.title = title
 			for _, name := range p.Sets {
 				tag := "geosite-" + name
 				addSet(tag, fmt.Sprintf(geositeURL, name))
@@ -158,8 +161,8 @@ func dnsServerFor(action string) string {
 // выводить: направленные в OpenVPN обязаны стоять выше частных сетей, иначе
 // корпоративные подсети вида 10.x уйдут напрямую. Поля одного правила
 // sing-box объединяет по «и», поэтому каждый тип пишется отдельным правилом.
-func (r resolved) routeRules(corp bool) []any {
-	var rules []any
+func (r resolved) routeRules(corp bool) []labeledRule {
+	var rules []labeledRule
 	for _, c := range r.cats {
 		if (c.action == profile.ActionCorp) != corp {
 			continue
@@ -174,7 +177,7 @@ func (r resolved) routeRules(corp bool) []any {
 			} else {
 				rule["outbound"] = outboundFor(c.action)
 			}
-			rules = append(rules, rule)
+			rules = append(rules, labeledRule{rule: rule, label: "категория «" + c.title + "»"})
 		}
 		add("domain_suffix", c.suffixes)
 		add("domain_keyword", c.keywords)
