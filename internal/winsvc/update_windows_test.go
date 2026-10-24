@@ -1,6 +1,7 @@
 package winsvc
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -8,6 +9,21 @@ import (
 	"github.com/maks-ard/vpn-client/internal/app"
 	"github.com/maks-ard/vpn-client/internal/update"
 )
+
+func TestSameSingBox(t *testing.T) {
+	own := []byte("встроенный sing-box")
+	dir := t.TempDir()
+	same := filepath.Join(dir, "same.exe")
+	other := filepath.Join(dir, "other.exe")
+	_ = os.WriteFile(same, append(append([]byte("заголовок"), own...), "хвост"...), 0o600)
+	_ = os.WriteFile(other, []byte("заголовок другой sing-box хвост"), 0o600)
+	if !sameSingBox(same, own) {
+		t.Error("тот же sing-box не найден")
+	}
+	if sameSingBox(other, own) || sameSingBox(filepath.Join(dir, "missing.exe"), own) || sameSingBox(same, nil) {
+		t.Error("обновление с другим sing-box принято за бесшовное")
+	}
+}
 
 func TestPendingUpdateIdleGrace(t *testing.T) {
 	root := t.TempDir()

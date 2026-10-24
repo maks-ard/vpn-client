@@ -3,6 +3,7 @@
 package winsvc
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -84,6 +85,11 @@ type pendingUpdate struct {
 	release   *update.Release
 	path      string
 	idleSince time.Time
+	// seamless — в новой версии тот же sing-box: её можно поставить при
+	// включённом VPN, передав ей работающий процесс.
+	seamless bool
+	// retryAt — когда снова пробовать фоновую установку после неудачной передачи.
+	retryAt time.Time
 }
 
 func (h *handler) info() ipc.Info {
@@ -358,7 +364,10 @@ func (h *handler) tryUpdate(ctx context.Context, m *app.Manager) {
 		h.setUpdate("", "", 0)
 		return
 	}
-	h.pending = &pendingUpdate{release: rel, path: path}
+	h.pending = &pendingUpdate{release: rel, path: path, seamless: sameSingBox(path, singboxbin.Data())}
+	if !h.pending.seamless {
+		m.Logf("обновление: в %s другой sing-box, установка после отключения VPN", rel.Version)
+	}
 	h.setUpdate("ready", rel.Version, 100)
 	h.applyPending(m)
 }
@@ -371,6 +380,10 @@ func (h *handler) applyPending(m *app.Manager) {
 	pending := h.pending
 	if m.Active() {
 		pending.idleSince = time.Time{}
+		if pending.seamless && time.Now().After(pending.retryAt) && m.State().Status == app.StatusConnected {
+			h.installInBackground(m, pending)
+			return
+		}
 		h.setStatus("Обновление " + pending.release.Version + " готово. Установится после отключения VPN")
 		return
 	}
@@ -398,6 +411,58 @@ func (h *handler) applyPending(m *app.Manager) {
 	}
 }
 
+// installInBackground ставит обновление при включённом VPN, не прерывая
+// соединения. Если передать sing-box не удалось, ждём и пробуем снова, а VPN
+// не трогаем. Вызывается под updateMu.
+func (h *handler) installInBackground(m *app.Manager, pending *pendingUpdate) {
+	waiting := "Обновление " + pending.release.Version + " готово. Установится после отключения VPN"
+	job, err := m.HandOff()
+	if err != nil {
+		pending.retryAt = time.Now().Add(time.Minute)
+		h.setStatus(waiting)
+		m.Logf("обновление: фоновая установка отложена: %v", err)
+		return
+	}
+	m.Logf("обновление: установка %s в фоне, sing-box продолжит работать после перезапуска", pending.release.Version)
+	attempted, err := h.installWithHandoff(m, pending, job)
+	if !attempted {
+		h.setStatus(waiting)
+		return
+	}
+	h.pending = nil
+	if err != nil {
+		h.setStatus("Не удалось установить обновление; повторите проверку. Подробности в журнале")
+		h.setUpdate("", "", 0)
+		m.Logf("обновление: %v", err)
+	}
+}
+
+// installWithHandoff ставит обновление; job — переданный sing-box. Если
+// перезапуска не будет, sing-box возвращается этой же службе.
+func (h *handler) installWithHandoff(m *app.Manager, pending *pendingUpdate, job string) (bool, error) {
+	attempted, err := m.InstallWhileIdle(func() error {
+		return h.installUpdate(m, pending.release, pending.path, job)
+	})
+	if job != "" && (!attempted || err != nil) {
+		if _, adoptErr := m.Adopt(); adoptErr != nil {
+			m.Logf("обновление: не удалось вернуть sing-box: %v", adoptErr)
+			m.Connect()
+		}
+	}
+	return attempted, err
+}
+
+// sameSingBox сообщает, встроен ли в скачанный exe тот же sing-box, что и в
+// работающую службу. sing-box лежит в exe без сжатия, поэтому скачанный файл
+// не нужно запускать: достаточно найти в нём байты своего.
+func sameSingBox(exe string, own []byte) bool {
+	if len(own) == 0 {
+		return false
+	}
+	data, err := os.ReadFile(exe)
+	return err == nil && bytes.Contains(data, own)
+}
+
 // installNow — кнопка «Установить сейчас»: не ждём, пока пользователь сам
 // отключит VPN. После перезапуска служба подключится снова по флагу resume.
 func (h *handler) installNow(m *app.Manager) error {
@@ -423,16 +488,7 @@ func (h *handler) installNow(m *app.Manager) error {
 			m.DisconnectWithReason("установка обновления")
 		}
 	}
-	attempted, err := m.InstallWhileIdle(func() error {
-		return h.installUpdate(m, pending.release, pending.path, job)
-	})
-	if job != "" && (!attempted || err != nil) {
-		// Перезапуска не будет: возвращаем sing-box этой же службе.
-		if _, adoptErr := m.Adopt(); adoptErr != nil {
-			m.Logf("обновление: не удалось вернуть sing-box: %v", adoptErr)
-			m.Connect()
-		}
-	}
+	attempted, err := h.installWithHandoff(m, pending, job)
 	if !attempted || err != nil {
 		if resume {
 			_ = os.Remove(resumeFile(Paths()))
