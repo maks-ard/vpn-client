@@ -20,6 +20,8 @@
   --red-soft: rgba(242, 109, 109, 0.10);
   --red-line: rgba(242, 109, 109, 0.35);
   --red-text: #E3BDBD;
+  --corp: #7FB8FF;
+  --corp-soft: rgba(127, 184, 255, 0.14);
   color-scheme: dark;
 }
 
@@ -343,12 +345,45 @@ button.list-row:hover, label.list-row:hover { background: var(--surface-hover); 
 
 /* Несохранённые настройки: панель всегда видна внизу прокрутки */
 .apply-bar {
-  position: sticky; bottom: 0; z-index: 5; margin-top: auto;
+  flex: none; margin: 0 16px 8px; z-index: 5;
   display: flex; align-items: center; gap: 8px; padding: 10px 10px 10px 14px; border-radius: 12px;
   background: var(--surface-2); border: 1px solid var(--border-strong);
   box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
 }
 .apply-bar .row-title { font-size: 13px; font-weight: 500; }
+
+/* Вкладка «Правила» */
+/* Длинные списки прокручиваются, а не сжимаются в колонке страницы. */
+#page-rules > * { flex: none; }
+#page-rules .stack-sm > .input { flex: none; }
+.subhead { display: flex; align-items: center; gap: 8px; }
+.subhead .page-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 4px; }
+.count { flex: none; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dest-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--off); flex: none; }
+.dest-dot.big { width: 12px; height: 12px; margin: 0 6px; }
+.dest-dot.corp { background: var(--corp); }
+.dest-dot.proxy { background: var(--accent); }
+.dest-dot.direct { background: var(--muted); }
+.dest-dot.block { background: var(--red); }
+.cat { padding: 10px 12px 10px 14px; }
+.seg { display: flex; padding: 2px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border-strong); flex: none; }
+.seg.wide { align-self: stretch; }
+.seg.wide button { flex: 1; padding: 0 4px; }
+.seg button { height: 26px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; }
+.seg button:hover:not(:disabled) { color: var(--text); }
+.seg button:disabled { opacity: .45; cursor: default; }
+.seg button.on { background: var(--surface-2); color: var(--text); cursor: default; }
+.seg button.on.proxy { background: var(--accent-soft); color: var(--accent); }
+.seg button.on.corp { background: var(--corp-soft); color: var(--corp); }
+.seg button.on.block { background: var(--red-soft); color: var(--red); }
+.tag {
+  flex: none; min-width: 84px; text-align: center; padding: 2px 8px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); font-size: 11px; color: var(--muted);
+}
+.select { flex: none; width: auto; max-width: 120px; padding: 0 6px; }
+.verdict .card-title { font-size: 16px; }
+.verdict .hint { user-select: text; }
+.hint.pad { padding: 0 4px; }
 
 /* Навигация */
 .nav { flex: none; display: flex; gap: 4px; padding: 6px 8px 8px; border-top: 1px solid var(--divider); }

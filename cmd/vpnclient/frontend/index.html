@@ -169,6 +169,8 @@
     </div>
   </main>
 
+  <main class="page" id="page-rules" hidden></main>
+
   <main class="page" id="page-settings" hidden>
     <h1 class="page-title pad">Настройки</h1>
 
@@ -247,36 +249,12 @@
             </div>
           </div>
         </div>
-        <div class="stack-sm" id="domains-block">
-          <div class="stack-xs">
-            <div class="field-title">Домены через OpenVPN</div>
-            <div class="hint">Поддомены включаются сами. Подсети и DNS-домены присылает сервер.</div>
-          </div>
-          <div class="chips" id="chips">
-            <form class="chip-add" id="domain-form">
-              <label class="visually-hidden" for="domain-input">Новый домен</label>
-              <input class="chip-input" id="domain-input" type="text" placeholder="+ домен" spellcheck="false" autocomplete="off">
-            </form>
-          </div>
-        </div>
+        <div class="hint" id="domains-block">Домены для OpenVPN теперь на вкладке «Правила».</div>
         <div class="divider" id="ovpn-remove-divider" hidden></div>
         <button class="btn ghost danger-text start" id="btn-ovpn-remove" hidden>
           <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
           Удалить профиль OpenVPN
         </button>
-      </div>
-    </section>
-
-    <section class="group">
-      <div class="section-label">Маршрутизация</div>
-      <div class="card list">
-        <label class="list-row">
-          <div class="card-text">
-            <div class="row-title">Российские сайты напрямую</div>
-            <div class="row-sub">Если выключить, через VLESS пойдёт всё, кроме корпоративной и локальной сети</div>
-          </div>
-          <input class="switch" type="checkbox" id="opt-russia">
-        </label>
       </div>
     </section>
 
@@ -334,15 +312,16 @@
 
     <button class="btn ghost start" id="btn-settings-undo" hidden>Вернуть предыдущие настройки</button>
 
-    <section class="apply-bar" id="settings-actions" role="status" hidden>
-      <div class="card-text">
-        <div class="row-title">Изменения не применены</div>
-        <div class="row-sub" id="settings-impact" hidden></div>
-      </div>
-      <button class="btn ghost strong" id="btn-discard">Отменить</button>
-      <button class="btn primary" id="btn-apply">Применить</button>
-    </section>
   </main>
+
+  <section class="apply-bar" id="settings-actions" role="status" hidden>
+    <div class="card-text">
+      <div class="row-title">Изменения не применены</div>
+      <div class="row-sub" id="settings-impact" hidden></div>
+    </div>
+    <button class="btn ghost strong" id="btn-discard">Отменить</button>
+    <button class="btn primary" id="btn-apply">Применить</button>
+  </section>
 
   <div class="toast" id="toast" role="alert" hidden></div>
 
@@ -350,6 +329,10 @@
     <button class="nav-btn active" data-page="main">
       <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/></svg>
       Главная
+    </button>
+    <button class="nav-btn" data-page="rules">
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h6"/><path d="M17 15l3 3-3 3"/></svg>
+      Правила
     </button>
     <button class="nav-btn" data-page="settings">
       <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>

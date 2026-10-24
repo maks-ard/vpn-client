@@ -141,6 +141,37 @@ func NormalizeRules(in []Rule) ([]Rule, error) {
 	return out, nil
 }
 
+// NormalizeRule проверяет одно правило. Если тип не указан, он определяется
+// по значению: ссылка на .srs, IP или подсеть, имя .exe, иначе домен.
+func NormalizeRule(r Rule) (Rule, error) {
+	if r.Type == "" {
+		r.Type = DetectRuleType(r.Value)
+	}
+	return normalizeRule(r)
+}
+
+// DetectRuleType угадывает тип правила по значению.
+func DetectRuleType(value string) string {
+	v := strings.TrimSpace(value)
+	switch {
+	case strings.HasPrefix(strings.ToLower(v), "https://") && strings.HasSuffix(strings.ToLower(v), ".srs"):
+		return RuleSet
+	case isIPOrPrefix(v):
+		return RuleCIDR
+	case strings.HasSuffix(strings.ToLower(v), ".exe") && !strings.ContainsAny(v, `/\`):
+		return RuleProcess
+	}
+	return RuleDomain
+}
+
+func isIPOrPrefix(v string) bool {
+	if _, err := netip.ParsePrefix(v); err == nil {
+		return true
+	}
+	_, err := netip.ParseAddr(v)
+	return err == nil
+}
+
 func normalizeRule(r Rule) (Rule, error) {
 	v := strings.TrimSpace(r.Value)
 	if v == "" {

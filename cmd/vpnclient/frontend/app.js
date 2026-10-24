@@ -1,6 +1,7 @@
 import { Call, Events, Window, Clipboard } from "/wails/runtime.js";
 import { serverLabels, serverIcon } from "./servers.js";
 import { subscriptionExpiry } from "./subscription.js";
+import { createRules } from "./rules.js";
 
 // Методы Go-сервиса main.Service (cmd/vpnclient/service.go).
 const svc = (method, ...args) => Call.ByName("main.Service." + method, ...args);
@@ -20,6 +21,21 @@ let update = { state: "", version: "", progress: 0 };
 // null — поиск .ovpn ещё не запускался.
 let profiles = null;
 let searching = false;
+// Каталог готовых категорий приходит вместе с настройками.
+let presets = [];
+
+const rules = createRules({
+  root: $("page-rules"),
+  svc,
+  getSettings: () => settings,
+  getPresets: () => presets,
+  getOvpn: () => ovpn,
+  getState: () => state,
+  isDirty: () => !!draft,
+  save: (patch) => save(patch),
+  showError: (e) => showError(e),
+  showToast: (text, kind) => showToast(text, kind),
+});
 
 const icons = {
   file: '<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7l-4-4z"/><path d="M14 3v4h4"/></svg>',
@@ -416,7 +432,6 @@ $("btn-check-now").addEventListener("click", () => runTest($("btn-check-now")));
 function renderSettings() {
   if (!settings) return;
   if (document.activeElement !== $("link")) $("link").value = settings.link || "";
-  $("opt-russia").checked = settings.russiaDirect;
   $("opt-autostart").checked = settings.autostart;
   $("opt-connect").checked = settings.connectOnStart;
   $("opt-tray").checked = settings.closeToTray;
@@ -441,18 +456,8 @@ function renderSettings() {
   if (document.activeElement !== $("ovpn-user")) $("ovpn-user").value = settings.ovpnUsername || "";
   if (document.activeElement !== $("ovpn-pass")) $("ovpn-pass").value = settings.ovpnPassword || "";
 
-  const chips = $("chips");
-  chips.querySelectorAll(".chip").forEach((c) => c.remove());
-  for (const domain of settings.corpDomains || []) {
-    const chip = el("div", "chip");
-    chip.append(domain);
-    const del = html("button", "", icons.close);
-    del.setAttribute("aria-label", "Удалить " + domain);
-    del.addEventListener("click", () => save({ corpDomains: settings.corpDomains.filter((d) => d !== domain) }));
-    chip.append(del);
-    chips.insertBefore(chip, $("domain-form"));
-  }
   renderLinkInfo();
+  rules.render();
 }
 
 function renderLinkInfo() {
@@ -488,8 +493,10 @@ function renderLinkInfo() {
   info.classList.toggle("bad", !!px.outdated);
 }
 
+// Панель «Применить» общая для настроек и правил: пока есть черновик, она видна
+// на любой странице, и всплывающие сообщения поднимаются над ней.
 function updateDirty() {
-  app.classList.toggle("dirty", !!draft && !$("page-settings").hidden);
+  app.classList.toggle("dirty", !!draft);
 }
 
 async function save(patch) {
@@ -544,6 +551,7 @@ async function reloadSettings() {
   settings = draft || view.settings;
   ovpn = view.ovpn;
   version = view.version;
+  presets = view.presets || [];
   renderSettings();
   renderMain();
 }
@@ -671,15 +679,6 @@ $("btn-diagnostics").addEventListener("click", () => {
 });
 $("btn-diagnostics-copy").addEventListener("click", () => copy($("diagnostics-preview").value));
 
-$("domain-form").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const value = $("domain-input").value.trim();
-  if (!value) return;
-  $("domain-input").value = "";
-  save({ corpDomains: [...(settings.corpDomains || []), value] });
-});
-
-$("opt-russia").addEventListener("change", (e) => save({ russiaDirect: e.target.checked }));
 $("opt-autostart").addEventListener("change", (e) => save({ autostart: e.target.checked }));
 $("opt-connect").addEventListener("change", (e) => save({ connectOnStart: e.target.checked }));
 $("opt-tray").addEventListener("change", (e) => save({ closeToTray: e.target.checked }));
@@ -700,6 +699,7 @@ $("btn-update").addEventListener("click", async () => {
 
 function showPage(name) {
   $("page-main").hidden = name !== "main";
+  $("page-rules").hidden = name !== "rules";
   $("page-settings").hidden = name !== "settings";
   document.querySelectorAll(".nav-btn").forEach((b) => {
     b.classList.toggle("active", b.dataset.page === name);

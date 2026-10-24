@@ -87,6 +87,8 @@ type SettingsView struct {
 	Settings app.Settings `json:"settings"`
 	OVPN     app.OVPNInfo `json:"ovpn"`
 	Version  string       `json:"version"`
+	// Presets — каталог готовых категорий для вкладки «Правила».
+	Presets []app.PresetInfo `json:"presets"`
 }
 
 func (s *Service) State() app.State {
@@ -103,7 +105,7 @@ func (s *Service) Settings() (SettingsView, error) {
 		s.mu.Lock()
 		cached := s.cached
 		s.mu.Unlock()
-		return SettingsView{Settings: cached, Version: s.versionLine()}, nil
+		return SettingsView{Settings: cached, Version: s.versionLine(), Presets: app.Presets()}, nil
 	}
 	info, infoErr := s.client.Info(ctx)
 	s.mu.Lock()
@@ -112,7 +114,7 @@ func (s *Service) Settings() (SettingsView, error) {
 		s.info = info
 	}
 	s.mu.Unlock()
-	return SettingsView{Settings: view.Settings, OVPN: view.OVPN, Version: s.versionLine()}, nil
+	return SettingsView{Settings: view.Settings, OVPN: view.OVPN, Version: s.versionLine(), Presets: app.Presets()}, nil
 }
 
 func (s *Service) versionLine() string {

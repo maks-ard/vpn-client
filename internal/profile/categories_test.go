@@ -68,6 +68,31 @@ func TestNormalizeCategoriesErrors(t *testing.T) {
 	}
 }
 
+func TestNormalizeRuleDetectsType(t *testing.T) {
+	cases := []struct{ in, wantType, wantValue string }{
+		{"Figma.com", RuleDomain, "figma.com"},
+		{"https://example.com/a.srs", RuleSet, "https://example.com/a.srs"},
+		{"10.0.0.5", RuleCIDR, "10.0.0.5/32"},
+		{"10.1.2.3/16", RuleCIDR, "10.1.0.0/16"},
+		{"2001:db8::1", RuleCIDR, "2001:db8::1/128"},
+		{"Zoom.exe", RuleProcess, "Zoom.exe"},
+		{"localhost", RuleDomain, "localhost"},
+	}
+	for _, c := range cases {
+		got, err := NormalizeRule(Rule{Value: c.in})
+		if err != nil || got.Type != c.wantType || got.Value != c.wantValue {
+			t.Errorf("NormalizeRule(%q) = %+v, %v; ожидалось %s %q", c.in, got, err, c.wantType, c.wantValue)
+		}
+	}
+	// Явный тип не перебивается автоопределением.
+	if got, err := NormalizeRule(Rule{Type: RuleKeyword, Value: "Slack"}); err != nil || got.Type != RuleKeyword || got.Value != "slack" {
+		t.Errorf("явный тип: %+v %v", got, err)
+	}
+	if _, err := NormalizeRule(Rule{Value: "a b"}); err == nil {
+		t.Error("ошибка должна доходить до пользователя")
+	}
+}
+
 func TestCategoryExportImport(t *testing.T) {
 	data, err := ExportCategory(Category{ID: "work", Name: "Работа", Action: ActionCorp, Rules: []Rule{{RuleDomain, "figma.com"}, {RuleProcess, "zoom.exe"}}})
 	if err != nil {
