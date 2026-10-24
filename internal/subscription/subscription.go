@@ -93,7 +93,32 @@ func Get(ctx context.Context, url, userAgent, cacheDir string) (*Subscription, e
 	return sub, nil
 }
 
+// infoUserAgents — клиенты, которым панели отдают subscription-userinfo.
+// Remnawave, например, шлёт срок и трафик только известным ей приложениям, а
+// остальным (в том числе v2rayN) — нет, и в нашем окне пропадает дата.
+var infoUserAgents = []string{"Happ/1.0", "v2RayTun/1.0"}
+
+// fetch скачивает подписку; если в ответе нет subscription-userinfo, дозапрашивает
+// его с User-Agent известных клиентов. Тело берётся из основного запроса.
 func fetch(ctx context.Context, url, userAgent string) (http.Header, []byte, error) {
+	header, body, err := fetchOnce(ctx, url, userAgent)
+	if err != nil || header.Get("Subscription-Userinfo") != "" {
+		return header, body, err
+	}
+	for _, ua := range infoUserAgents {
+		h, _, err := fetchOnce(ctx, url, ua)
+		if err != nil {
+			continue
+		}
+		if info := h.Get("Subscription-Userinfo"); info != "" {
+			header.Set("Subscription-Userinfo", info)
+			break
+		}
+	}
+	return header, body, nil
+}
+
+func fetchOnce(ctx context.Context, url, userAgent string) (http.Header, []byte, error) {
 	if userAgent == "" {
 		userAgent = DefaultUserAgent
 	}

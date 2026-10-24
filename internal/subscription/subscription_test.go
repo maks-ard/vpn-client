@@ -58,6 +58,7 @@ func TestGetWithCache(t *testing.T) {
 			http.Error(w, "down", http.StatusBadGateway)
 			return
 		}
+		w.Header().Set("Subscription-Userinfo", "total=1000; expire=1893456000")
 		_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString([]byte(links))))
 	}))
 	defer srv.Close()
@@ -79,5 +80,38 @@ func TestGetWithCache(t *testing.T) {
 
 	if _, err := Get(context.Background(), srv.URL, "", t.TempDir()); err == nil {
 		t.Fatal("без кэша и сети ожидалась ошибка")
+	}
+}
+
+// Панель отдаёт срок и трафик только известным ей клиентам: для остальных
+// заголовка нет, и мы дозапрашиваем его с их User-Agent.
+func TestGetInfoUserAgentFallback(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.UserAgent())
+		if strings.HasPrefix(r.UserAgent(), "Happ/") {
+			w.Header().Set("Subscription-Userinfo", "upload=0; download=5; total=0; expire=1893456000")
+		}
+		_, _ = w.Write([]byte(links))
+	}))
+	defer srv.Close()
+
+	sub, err := Get(context.Background(), srv.URL, "", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Expire.Year() != 2030 || sub.Download != 5 || len(sub.Servers) != 2 {
+		t.Errorf("info: %+v, серверов %d", sub.Info, len(sub.Servers))
+	}
+	if strings.Join(seen, ",") != DefaultUserAgent+",Happ/1.0" {
+		t.Errorf("запросы: %v", seen)
+	}
+
+	// Панель без срока: перебор клиентов заканчивается, подписка работает.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(links)) }))
+	defer srv2.Close()
+	sub, err = Get(context.Background(), srv2.URL, "", t.TempDir())
+	if err != nil || !sub.Expire.IsZero() || len(sub.Servers) != 2 {
+		t.Errorf("без срока: %+v, %v", sub, err)
 	}
 }
