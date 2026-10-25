@@ -666,9 +666,11 @@ func (m *Manager) monitor(ctx context.Context, api *clash, info sessionInfo) {
 					_ = api.groupDelay(reqCtx, singbox.TagAuto)
 				}
 				cancel()
-				ok := m.checkServices(ctx, api)
-				if !ok && multi && m.failover(ctx, api) {
-					ok = m.checkServices(ctx, api)
+				// Переключаемся и при частичном отказе: через сервер с выходом
+				// в России YouTube открывается, а заблокированные сервисы — нет.
+				ok, all := m.checkServices(ctx, api)
+				if !all && multi && m.failover(ctx, api) {
+					ok, _ = m.checkServices(ctx, api)
 				}
 				if ctx.Err() != nil {
 					return
@@ -745,7 +747,10 @@ const (
 
 // failover в режиме «авто» закрепляет сервер, через который открывается больше
 // всего сервисов. urltest меряет только YouTube и раз в 5 минут, поэтому после
-// обрыва долго держится за сервер, который уже не работает.
+// обрыва долго держится за сервер, который уже не работает, а самым быстрым
+// часто выбирает сервер с выходом в России, где YouTube не заблокирован.
+// Сервер меняется, только если новый открывает больше сервисов, чем текущий:
+// иначе при сбое одного сервиса выбор скакал бы по задержкам.
 func (m *Manager) failover(ctx context.Context, api *clash) bool {
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	proxies, err := api.proxies(reqCtx)
@@ -760,14 +765,18 @@ func (m *Manager) failover(ctx context.Context, api *clash) bool {
 			servers = append(servers, name)
 		}
 	}
-	best := bestServer(ctx, api, servers)
+	current := selector.Now
+	if current == singbox.TagAuto {
+		current = proxies[singbox.TagAuto].Now
+	}
+	best, opened := bestServer(ctx, api, servers)
 	if best == "" || ctx.Err() != nil {
 		return false
 	}
 	// Пользователь мог выбрать сервер вручную, пока шла проверка.
 	m.settingsMu.Lock()
 	defer m.settingsMu.Unlock()
-	if m.Settings().Server != "" || selector.Now == best {
+	if m.Settings().Server != "" || best == current || opened[best] <= opened[current] {
 		return false
 	}
 	reqCtx, cancel = context.WithTimeout(ctx, 5*time.Second)

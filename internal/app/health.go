@@ -24,19 +24,20 @@ type ServiceCheck struct {
 }
 
 // Каждый сервис проверяется отдельно: успех YouTube не означает доступность остальных.
-// Возвращает false, если через прокси не открылся ни один сервис.
-func (m *Manager) checkServices(ctx context.Context, api *clash) bool {
+// some — открылся хоть один сервис, all — открылись все.
+func (m *Manager) checkServices(ctx context.Context, api *clash) (some, all bool) {
 	checks := probeServices(ctx, api, singbox.TagProxy)
 	if ctx.Err() != nil {
-		return true
+		return true, true
 	}
-	ok := false
+	all = true
 	for _, check := range checks {
-		ok = ok || check.OK
+		some = some || check.OK
+		all = all && check.OK
 		m.healthWarning(check.Name+":", !check.OK, check.Name+": проверка доступа через прокси не прошла")
 	}
 	m.update(func(s *State) { s.Proxy.Checks = checks })
-	return ok
+	return some, all
 }
 
 func probeServices(ctx context.Context, api *clash, outbound string) []ServiceCheck {
@@ -60,7 +61,8 @@ func probeServices(ctx context.Context, api *clash, outbound string) []ServiceCh
 // через который открывается больше сервисов, а при равенстве — с меньшей
 // суммарной задержкой. Задержка до одного YouTube (как в urltest) не говорит,
 // откроются ли остальные сайты. Пустая строка — ни один сервер не работает.
-func bestServer(ctx context.Context, api *clash, servers []string) string {
+// opened — сколько сервисов открылось через каждый сервер.
+func bestServer(ctx context.Context, api *clash, servers []string) (best string, opened map[string]int) {
 	type score struct{ ok, delay int }
 	scores := make([]score, len(servers))
 	var workers sync.WaitGroup
@@ -77,16 +79,18 @@ func bestServer(ctx context.Context, api *clash, servers []string) string {
 		}()
 	}
 	workers.Wait()
-	best := -1
+	opened = map[string]int{}
+	top := -1
 	for i, s := range scores {
-		if s.ok > 0 && (best < 0 || s.ok > scores[best].ok || s.ok == scores[best].ok && s.delay < scores[best].delay) {
-			best = i
+		opened[servers[i]] = s.ok
+		if s.ok > 0 && (top < 0 || s.ok > scores[top].ok || s.ok == scores[top].ok && s.delay < scores[top].delay) {
+			top = i
 		}
 	}
-	if best < 0 {
-		return ""
+	if top < 0 {
+		return "", opened
 	}
-	return servers[best]
+	return servers[top], opened
 }
 
 const corpAuthFailed = "сервер OpenVPN отклонил авторизацию; проверьте учётные данные и параллельные подключения"

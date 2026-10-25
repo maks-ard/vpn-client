@@ -186,10 +186,10 @@ func fakeClash(t *testing.T, now string) (*clash, *string) {
 
 func TestBestServerPrefersMoreServices(t *testing.T) {
 	api, _ := fakeClash(t, "bad")
-	if got := bestServer(context.Background(), api, []string{"bad", "partial", "slow"}); got != "slow" {
+	if got, _ := bestServer(context.Background(), api, []string{"bad", "partial", "slow"}); got != "slow" {
 		t.Fatalf("выбран %q вместо сервера, открывающего все сервисы", got)
 	}
-	if got := bestServer(context.Background(), api, []string{"bad"}); got != "" {
+	if got, _ := bestServer(context.Background(), api, []string{"bad"}); got != "" {
 		t.Fatalf("выбран неработающий сервер %q", got)
 	}
 }
@@ -210,5 +210,20 @@ func TestFailoverKeepsAutoSelection(t *testing.T) {
 	*selected = "bad"
 	if m.failover(context.Background(), api) || *selected != "bad" {
 		t.Fatal("ручной выбор сервера заменён автоматически")
+	}
+}
+
+// Сервер, через который не открывается часть сервисов (выход в России:
+// YouTube есть, Claude нет), в «авто» меняется на открывающий всё.
+func TestFailoverLeavesPartialServer(t *testing.T) {
+	m, _ := NewManager(testPaths(t), nil)
+	t.Cleanup(func() { _ = m.log.Close() })
+	api, selected := fakeClash(t, "partial")
+	if !m.failover(context.Background(), api) || *selected != "slow" {
+		t.Fatalf("частично работающий сервер не заменён: %q", *selected)
+	}
+	// Сервер, лучше которого нет, не меняется на равный по задержке.
+	if m.failover(context.Background(), api) || *selected != "slow" {
+		t.Fatalf("сервер заменён без выигрыша: %q", *selected)
 	}
 }
