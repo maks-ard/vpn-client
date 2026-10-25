@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/maks-ard/vpn-client/internal/killswitch"
 	"github.com/maks-ard/vpn-client/internal/profile"
 	"github.com/maks-ard/vpn-client/internal/runner"
 	"github.com/maks-ard/vpn-client/internal/singbox"
@@ -42,6 +43,8 @@ type State struct {
 	Proxy ProxyState `json:"proxy"`
 	// Warnings — некритичные замечания (подписка из кэша, директивы .ovpn).
 	Warnings []string `json:"warnings,omitempty"`
+	// KillSwitch — блокировка включена: пока VPN не работает, интернета нет.
+	KillSwitch bool `json:"killSwitch,omitempty"`
 	// Service заполняет окно, когда со службой что-то не так:
 	// "missing" — не установлена, "installing" — ставится, "unavailable" — не отвечает.
 	Service string `json:"service,omitempty"`
@@ -109,6 +112,15 @@ type Manager struct {
 	// создало бы второй TUN рядом с работающим.
 	handedOff bool
 	handoffCh chan chan handoffReply
+
+	// guardMu защищает kill switch; берётся раньше mu.
+	guardMu     sync.Mutex
+	firewall    firewall
+	newFirewall func(killswitch.Rules) (firewall, error)
+	// guardExe — sing-box текущей сессии; пусто, пока сессии нет.
+	guardExe string
+	// keepGuard — идёт переподключение: блокировку не снимать.
+	keepGuard bool
 }
 
 func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
@@ -119,7 +131,7 @@ func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
 	}
 	log.redact(s.Link)
 	m := &Manager{paths: paths, onChange: onChange, log: log, settings: s, singBoxPath: os.Getenv("VPNCLIENT_SINGBOX"),
-		handoffCh: make(chan chan handoffReply)}
+		handoffCh: make(chan chan handoffReply), newFirewall: enableFirewall}
 	m.state = m.idleState()
 	m.loadSubscriptionInfo()
 	return m, nil
@@ -180,8 +192,9 @@ func (m *Manager) SaveSettings(s Settings) error {
 	}
 	if active && routingChanged(old, s) {
 		m.log.Printf("настройки изменены, переподключение")
-		m.DisconnectWithReason("изменение настроек маршрутизации")
-		m.Connect()
+		m.restart("изменение настроек маршрутизации")
+	} else if active && old.KillSwitch != s.KillSwitch {
+		m.refreshGuard()
 	}
 	return nil
 }
@@ -236,8 +249,7 @@ func (m *Manager) reconnectIfActive(reason string) {
 	m.notify(state)
 	if active {
 		m.log.Printf("%s, переподключение", reason)
-		m.DisconnectWithReason(reason)
-		m.Connect()
+		m.restart(reason)
 	}
 }
 
@@ -352,6 +364,7 @@ func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}
 	defer close(done)
 	var err error
 	if adopted != nil {
+		m.guard(m.singBoxExe())
 		err = m.supervise(ctx, adopted)
 		adopted.release()
 	} else {
@@ -373,6 +386,8 @@ func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}
 		err = m.session(ctx, settings)
 	}
 
+	// Новая версия службы ставит свою блокировку, когда подхватит sing-box.
+	guarded := m.unguard()
 	if errors.Is(err, errHandedOff) {
 		// Состояние не сбрасываем: VPN продолжает работать в новой версии службы.
 		m.mu.Lock()
@@ -396,6 +411,7 @@ func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}
 	m.state.Proxy.Used = proxy.Used
 	m.state.Proxy.Total = proxy.Total
 	m.state.Proxy.Outdated = proxy.Outdated
+	m.state.KillSwitch = guarded
 	if err != nil && ctx.Err() == nil {
 		m.state.Status = StatusError
 		m.state.Error = err.Error()
@@ -463,6 +479,8 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 		s.Warnings = in.Warnings()
 		s.Proxy = proxyStateFromInput(in, settings)
 	})
+	// Блокировка ставится до запуска sing-box и остаётся при его перезапусках.
+	m.guard(exe)
 
 	output := newSessionOutput(m)
 	proc, err := runner.Start(runner.Options{Exe: exe, Config: config, DataDir: m.paths.Data, Output: output})

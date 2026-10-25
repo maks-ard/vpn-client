@@ -30,7 +30,10 @@ type Settings struct {
 	// приоритет. В старых settings.json поля нет: это то же, что пустой список.
 	Categories []profile.Category `json:"categories"`
 
-	RussiaDirect   bool `json:"russiaDirect"`
+	RussiaDirect bool `json:"russiaDirect"`
+	// KillSwitch — пока VPN включён, но не работает (sing-box упал или
+	// переподключается), соединения в интернет блокируются, а не идут напрямую.
+	KillSwitch     bool `json:"killSwitch"`
 	Autostart      bool `json:"autostart"`
 	ConnectOnStart bool `json:"connectOnStart"`
 	CloseToTray    bool `json:"closeToTray"`

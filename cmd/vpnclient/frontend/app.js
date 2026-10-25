@@ -175,6 +175,8 @@ function renderMain() {
   let sub = "";
   if (st === "disconnected") sub = "Нажмите, чтобы подключиться";
   if (st === "connecting") sub = "Запускаем туннель";
+  // Kill switch держит блокировку, пока sing-box переподключается.
+  if (st === "connecting" && state.killSwitch) sub = "Интернет заблокирован, пока VPN не восстановится. Отключите VPN, чтобы снять блокировку";
   // Служба (она держит VPN) ещё не установлена или не отвечает.
   if (state.service === "missing") {
     title = "Нужна установка";
@@ -435,6 +437,7 @@ function renderSettings() {
   $("opt-autostart").checked = settings.autostart;
   $("opt-connect").checked = settings.connectOnStart;
   $("opt-tray").checked = settings.closeToTray;
+  $("opt-killswitch").checked = settings.killSwitch;
 
   // Статус обновления сервис дописывает в конец строки версии.
   const [versionTitle, ...versionRest] = version.split(" · ");
@@ -682,6 +685,7 @@ $("btn-diagnostics-copy").addEventListener("click", () => copy($("diagnostics-pr
 $("opt-autostart").addEventListener("change", (e) => save({ autostart: e.target.checked }));
 $("opt-connect").addEventListener("change", (e) => save({ connectOnStart: e.target.checked }));
 $("opt-tray").addEventListener("change", (e) => save({ closeToTray: e.target.checked }));
+$("opt-killswitch").addEventListener("change", (e) => save({ killSwitch: e.target.checked }));
 $("btn-update").addEventListener("click", async () => {
   try {
     await svc("CheckUpdate");

@@ -243,10 +243,16 @@ func inbound(in *Input) M {
 	return tunInbound(in.Profile)
 }
 
+// Адреса TUN. По ним kill switch отличает соединения, идущие через VPN.
+var (
+	TunAddress4 = netip.MustParsePrefix("172.19.0.1/30")
+	TunAddress6 = netip.MustParsePrefix("fdfe:dcba:9876::1/126")
+)
+
 func tunInbound(p *profile.Profile) M {
-	address := []string{"172.19.0.1/30"}
+	address := []string{TunAddress4.String()}
 	if p.TUN.IPv6 {
-		address = append(address, "fdfe:dcba:9876::1/126")
+		address = append(address, TunAddress6.String())
 	}
 	return M{
 		"type":           "tun",

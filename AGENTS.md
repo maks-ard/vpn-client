@@ -56,6 +56,7 @@ internal/ovpn/       парсер .ovpn → ovpn.Config (без зависимо
 internal/vless/      парсер ссылок vless://
 internal/singbox/    сборка JSON-конфига sing-box
 internal/runner/     запуск/остановка sing-box, распаковка встроенного; *_windows.go / *_other.go
+internal/killswitch/ kill switch: фильтры WFP (fwpuclnt.dll) в динамической сессии службы
 internal/singboxbin/ sing-box.exe, встроенный в релизную сборку (тег embed_singbox)
 winres/winres.json   иконка, манифест (asInvoker: окно без прав) и версия exe для go-winres
 profiles/example.yaml  пример профиля для vpnctl
@@ -68,7 +69,7 @@ profiles/example.yaml  пример профиля для vpnctl
 его окно открывает напрямую, когда служба не отвечает.
 
 Зависимости направлены строго вниз: `cmd` → `winsvc`/`ipc` → `app` → `singbox` →
-`profile`/`subscription`/`ovpn`/`vless`; `runner` ни от чего внутреннего не зависит.
+`profile`/`subscription`/`ovpn`/`vless`; `runner` и `killswitch` ни от чего внутреннего не зависят.
 Wails импортирует только `cmd/vpnclient`: `internal/app` тестируется без GUI.
 
 ## GUI
@@ -148,6 +149,13 @@ Wails импортирует только `cmd/vpnclient`: `internal/app` тес
 - Конфиг передаётся в sing-box через stdin (`-c stdin`), чтобы секреты не
   оставались на диске. `vpnctl config -o` пишет файл с правами `0600`.
 - Не отключай `strict_route` в TUN: на Windows он защищает от DNS-утечек.
+- Kill switch (`internal/killswitch`, решение владельца) — единственная своя сетевая
+  логика. Сессия WFP только динамическая: при падении службы Windows снимает фильтры,
+  постоянные фильтры могут оставить машину без сети. Трафик через VPN разрешается по
+  адресу TUN (`singbox.TunAddress4/6`), сменишь адрес — он сменится и здесь. Соединения
+  с app ID `System` разрешены намеренно: KES пересоздаёт в ядре соединения sing-box.
+  Настоящие фильтры проверяет `TestEnable` (от администратора,
+  `VPNCLIENT_KILLSWITCH_TEST=1`; на пару секунд отключает сеть у всей машины).
 
 ## Релизы
 
