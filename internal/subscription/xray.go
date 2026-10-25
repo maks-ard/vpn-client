@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -86,6 +87,28 @@ type xrayStream struct {
 
 func isJSON(text string) bool {
 	return strings.HasPrefix(text, "[") || strings.HasPrefix(text, "{")
+}
+
+// xrayNotice возвращает названия пунктов без единого сервера: так панели
+// сообщают, почему серверов нет.
+func xrayNotice(text string) string {
+	var configs []xrayConfig
+	if strings.HasPrefix(text, "{") {
+		var one xrayConfig
+		if json.Unmarshal([]byte(text), &one) != nil {
+			return ""
+		}
+		configs = []xrayConfig{one}
+	} else if json.Unmarshal([]byte(text), &configs) != nil {
+		return ""
+	}
+	var notices []string
+	for _, cfg := range configs {
+		if cfg.Remarks != "" && !slices.Contains(notices, cfg.Remarks) {
+			notices = append(notices, cfg.Remarks)
+		}
+	}
+	return strings.Join(notices, "; ")
 }
 
 // parseXrayJSON достаёт VLESS-серверы из подписки в формате Xray JSON:

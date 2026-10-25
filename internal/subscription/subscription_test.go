@@ -115,3 +115,37 @@ func TestGetInfoUserAgentFallback(t *testing.T) {
 		t.Errorf("без срока: %+v, %v", sub, err)
 	}
 }
+
+// Панель с лимитом устройств присылает вместо серверов заглушку с причиной в
+// названии. Причина показывается, а VPN работает по последнему рабочему
+// списку: заглушка не должна затирать кэш.
+func TestPanelNoticeKeepsCache(t *testing.T) {
+	stub := `{"remarks":"Превышено кол-во устройств","outbounds":[{"tag":"direct","protocol":"freedom"},{"tag":"block","protocol":"blackhole"}]}`
+	limited := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if limited {
+			_, _ = w.Write([]byte(stub))
+			return
+		}
+		_, _ = w.Write([]byte(links))
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	if _, err := Get(context.Background(), srv.URL, "", dir); err != nil {
+		t.Fatal(err)
+	}
+
+	limited = true
+	for range 2 {
+		sub, err := Get(context.Background(), srv.URL, "", dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sub.FromCache || len(sub.Servers) != 2 {
+			t.Fatalf("ожидался кэш с 2 серверами: %+v", sub)
+		}
+		if sub.FetchError == nil || !strings.Contains(sub.FetchError.Error(), "Превышено кол-во устройств") {
+			t.Fatalf("причина отказа не показана: %v", sub.FetchError)
+		}
+	}
+}

@@ -170,6 +170,13 @@ func Parse(body []byte, header http.Header) (*Subscription, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Вместо серверов панель может прислать заглушку с причиной отказа
+		// в названии («Превышено кол-во устройств»): её и показываем.
+		if len(servers) == 0 && len(skipped) == 0 {
+			if notice := xrayNotice(text); notice != "" {
+				return nil, fmt.Errorf("сервер подписки сообщает: %s", notice)
+			}
+		}
 		return finish(&Subscription{Info: parseInfo(header), Skipped: skipped}, servers)
 	}
 	if !strings.Contains(text, "://") {
