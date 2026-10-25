@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,11 +120,12 @@ func TestPrepareRuleSets(t *testing.T) {
 	if want < 2 {
 		t.Fatalf("у категории «Соцсети» должно быть несколько наборов, а их %d", want)
 	}
-	fetched := 0
-	m.fetchSet = func(context.Context, string) ([]byte, error) { fetched++; return []byte("data"), nil }
+	// Наборы скачиваются параллельно.
+	var fetched atomic.Int32
+	m.fetchSet = func(context.Context, string) ([]byte, error) { fetched.Add(1); return []byte("data"), nil }
 	paths := m.prepareRuleSets(ctx, "", in)
-	if len(paths) != want || fetched != want {
-		t.Fatalf("получено наборов: %d из %d, скачиваний %d", len(paths), want, fetched)
+	if len(paths) != want || int(fetched.Load()) != want {
+		t.Fatalf("получено наборов: %d из %d, скачиваний %d", len(paths), want, fetched.Load())
 	}
 	for tag, p := range paths {
 		if _, err := os.Stat(p); err != nil {
@@ -131,8 +133,8 @@ func TestPrepareRuleSets(t *testing.T) {
 		}
 	}
 	// Повторное подключение берёт свежие копии, не скачивая заново.
-	if m.prepareRuleSets(ctx, "", in); fetched != want {
-		t.Errorf("свежие копии скачаны повторно: %d", fetched)
+	if m.prepareRuleSets(ctx, "", in); int(fetched.Load()) != want {
+		t.Errorf("свежие копии скачаны повторно: %d", fetched.Load())
 	}
 
 	// Сеть недоступна и копий нет: набор пропущен, конфиг собирается.
