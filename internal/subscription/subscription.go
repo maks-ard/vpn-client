@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,7 +48,8 @@ type Server struct {
 type Subscription struct {
 	Info
 	Servers []Server
-	// Skipped — строки, которые не удалось использовать (другой протокол и т.п.).
+	// Skipped — строки, которые не удалось использовать (другой протокол и т.п.),
+	// в виде «имя: причина», если у строки есть имя.
 	Skipped []string
 	// FetchedAt — когда список был получен с сервера.
 	FetchedAt time.Time
@@ -201,17 +203,44 @@ func Parse(body []byte, header http.Header) (*Subscription, error) {
 			if !ok || len(scheme) > 20 {
 				scheme = "строка"
 			}
-			sub.Skipped = append(sub.Skipped, scheme+": протокол пока не поддерживается")
+			sub.Skipped = append(sub.Skipped, withName(line, scheme+": протокол пока не поддерживается"))
 			continue
 		}
 		link, err := vless.ParseLink(line)
 		if err != nil {
-			sub.Skipped = append(sub.Skipped, err.Error())
+			sub.Skipped = append(sub.Skipped, withName(line, err.Error()))
 			continue
 		}
 		servers = append(servers, Server{Name: link.Name, Links: []*vless.Link{link}})
 	}
 	return finish(sub, servers)
+}
+
+// withName добавляет к причине имя сервера из ссылки, чтобы пропуск можно
+// было сопоставить с выбранным пользователем сервером.
+func withName(line, reason string) string {
+	_, fragment, ok := strings.Cut(line, "#")
+	if !ok {
+		return reason
+	}
+	if name, err := url.PathUnescape(fragment); err == nil {
+		fragment = name
+	}
+	if fragment = strings.TrimSpace(fragment); fragment == "" {
+		return reason
+	}
+	return fragment + ": " + reason
+}
+
+// SkippedFor возвращает причины, по которым пропущен сервер с этим именем.
+func (s *Subscription) SkippedFor(name string) []string {
+	var out []string
+	for _, msg := range s.Skipped {
+		if strings.HasPrefix(msg, name+": ") {
+			out = append(out, msg)
+		}
+	}
+	return out
 }
 
 // finish даёт серверам уникальные имена (они становятся тегами в sing-box)

@@ -390,3 +390,26 @@ func keys(m map[string]M) []string {
 	}
 	return out
 }
+
+// Пропущенные серверы подписки не должны постоянно висеть замечанием в окне:
+// о них говорим, только если пропущен выбранный пользователем сервер.
+func TestWarningsSkippedServers(t *testing.T) {
+	sub := &subscription.Subscription{
+		Servers: []subscription.Server{{Name: "Нидерланды"}},
+		Skipped: []string{"Финляндия: транспорт XHTTP не поддерживается sing-box"},
+	}
+	for selected, want := range map[string]bool{"": false, "Нидерланды": false, "Финляндия": true, "Германия": false} {
+		in := &Input{
+			Profile:      &profile.Profile{Subscription: &profile.Subscription{Server: selected}},
+			Subscription: sub,
+			Servers:      sub.Servers,
+		}
+		warn := strings.Join(in.Warnings(), "\n")
+		if got := strings.Contains(warn, "XHTTP"); got != want {
+			t.Errorf("выбран %q: замечание %q", selected, warn)
+		}
+		if len(in.Skipped()) != 1 {
+			t.Errorf("выбран %q: для журнала нужен полный список пропусков", selected)
+		}
+	}
+}

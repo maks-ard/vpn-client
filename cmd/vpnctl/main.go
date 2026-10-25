@@ -92,6 +92,9 @@ func (c *common) load() (*singbox.Input, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	for _, s := range in.Skipped() {
+		fmt.Fprintln(os.Stderr, "подписка: пропущен сервер:", s)
+	}
 	for _, w := range in.Warnings() {
 		fmt.Fprintln(os.Stderr, "предупреждение:", w)
 	}

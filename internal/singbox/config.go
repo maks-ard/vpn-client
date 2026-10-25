@@ -153,8 +153,15 @@ func (in *Input) Warnings() []string {
 			w = append(w, fmt.Sprintf("подписка: не удалось обновить (%v), используется список от %s",
 				sub.FetchError, sub.FetchedAt.Format("02.01.2006 15:04")))
 		}
-		for _, s := range sub.Skipped {
-			w = append(w, "подписка: пропущен сервер: "+s)
+		// Пропущенные серверы (например, с XHTTP) в списке не видны, и при
+		// рабочих соседях замечание о них висело бы постоянно. Говорим о них,
+		// только если пропущен именно выбранный сервер: тогда подключение
+		// молча ушло бы на «Авто». Если не подошёл ни один, ошибку с причинами
+		// вернёт сама подписка. Полный список пишется в журнал (Skipped).
+		if name := selectedServer(in.Profile); name != "" && !hasServer(in.Servers, name) {
+			for _, s := range sub.SkippedFor(name) {
+				w = append(w, "подписка: выбранный сервер недоступен, используется «Авто»: "+s)
+			}
 		}
 	}
 	for _, s := range resolveCategories(in).warnings {
@@ -170,6 +177,31 @@ func (in *Input) Warnings() []string {
 		w = append(w, "openvpn: redirect-gateway в .ovpn проигнорирован, через OpenVPN идут только корпоративные адреса")
 	}
 	return w
+}
+
+// Skipped — серверы подписки, которые пропущены без предупреждения в окне.
+// Их стоит записать в журнал.
+func (in *Input) Skipped() []string {
+	if in.Subscription == nil {
+		return nil
+	}
+	return in.Subscription.Skipped
+}
+
+func selectedServer(p *profile.Profile) string {
+	if p.Subscription == nil {
+		return ""
+	}
+	return p.Subscription.Server
+}
+
+func hasServer(servers []subscription.Server, name string) bool {
+	for _, s := range servers {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Build возвращает конфиг sing-box в виде JSON.

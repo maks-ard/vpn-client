@@ -466,6 +466,9 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 	// Наборы категорий скачиваются и проверяются заранее: недоступная ссылка
 	// на набор не должна мешать запуску sing-box.
 	in.LocalSets = m.prepareRuleSets(ctx, exe, in)
+	for _, s := range in.Skipped() {
+		m.log.Printf("подписка: пропущен сервер: %s", s)
+	}
 	for _, w := range in.Warnings() {
 		m.log.Printf("предупреждение: %s", w)
 	}

@@ -25,7 +25,7 @@ func TestParseBase64(t *testing.T) {
 	if len(sub.Servers) != 2 || sub.Servers[0].Name != "🇳🇱 Нидерланды" || sub.Servers[1].Links[0].Transport != "ws" {
 		t.Errorf("servers: %+v", sub.Servers)
 	}
-	if len(sub.Skipped) != 1 || !strings.HasPrefix(sub.Skipped[0], "trojan") {
+	if len(sub.Skipped) != 1 || sub.Skipped[0] != "Trojan: trojan: протокол пока не поддерживается" {
 		t.Errorf("skipped: %v", sub.Skipped)
 	}
 	if sub.Title != "Мой VPN" || sub.Upload != 100 || sub.Download != 200 || sub.Total != 1000 || sub.Expire.Year() != 2030 {
@@ -165,6 +165,22 @@ func TestParseHysteria2(t *testing.T) {
 		t.Errorf("link: %+v", l)
 	}
 	if len(sub.Skipped) != 1 || !strings.Contains(sub.Skipped[0], "пароля") {
+		t.Errorf("skipped: %v", sub.Skipped)
+	}
+}
+
+func TestSkippedFor(t *testing.T) {
+	body := "vless://11111111-2222-3333-4444-555555555555@a.example.com:443?type=xhttp#%D0%A4%D0%B8%D0%BD%D0%BB%D1%8F%D0%BD%D0%B4%D0%B8%D1%8F\n" +
+		"vless://11111111-2222-3333-4444-555555555555@b.example.com:443?type=xhttp\n" +
+		"vless://22222222-2222-3333-4444-555555555555@de.example.com:8443?security=tls&type=ws&path=%2Fws#Germany\n"
+	sub, err := Parse([]byte(body), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sub.SkippedFor("Финляндия"); len(got) != 1 || !strings.Contains(got[0], "XHTTP") {
+		t.Errorf("Финляндия: %v (всё: %v)", got, sub.Skipped)
+	}
+	if len(sub.Skipped) != 2 || sub.SkippedFor("Germany") != nil {
 		t.Errorf("skipped: %v", sub.Skipped)
 	}
 }
