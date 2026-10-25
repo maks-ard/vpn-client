@@ -1,5 +1,5 @@
 // Package subscription скачивает и разбирает подписки (Remnawave, Marzban,
-// 3x-ui и т.п.): по https-ссылке сервер отдаёт список ссылок vless://,
+// 3x-ui и т.п.): по https-ссылке сервер отдаёт список ссылок vless:// и hysteria2://,
 // обычно в base64, а в заголовках — название, остаток трафика и срок.
 package subscription
 
@@ -194,15 +194,17 @@ func Parse(body []byte, header http.Header) (*Subscription, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if !strings.HasPrefix(line, "vless://") {
-			scheme, _, ok := strings.Cut(line, "://")
+		scheme, _, ok := strings.Cut(line, "://")
+		switch strings.ToLower(scheme) {
+		case "vless", "hysteria2", "hy2":
+		default:
 			if !ok || len(scheme) > 20 {
 				scheme = "строка"
 			}
 			sub.Skipped = append(sub.Skipped, scheme+": протокол пока не поддерживается")
 			continue
 		}
-		link, err := vless.Parse(line)
+		link, err := vless.ParseLink(line)
 		if err != nil {
 			sub.Skipped = append(sub.Skipped, err.Error())
 			continue

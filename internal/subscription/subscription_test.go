@@ -149,3 +149,22 @@ func TestPanelNoticeKeepsCache(t *testing.T) {
 		}
 	}
 }
+
+func TestParseHysteria2(t *testing.T) {
+	body := "hysteria2://pass@hy.example.com:443?obfs=salamander&obfs-password=x#Hysteria\n" +
+		"hy2://pass@hy2.example.com:443,20000-30000#\n" +
+		"hysteria2://hy.example.com:443#без пароля\n"
+	sub, err := Parse([]byte(body), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sub.Servers) != 2 || sub.Servers[0].Name != "Hysteria" || sub.Servers[1].Name != "hy2.example.com" {
+		t.Errorf("servers: %+v", sub.Servers)
+	}
+	if l := sub.Servers[1].Links[0]; l.Protocol != "hysteria2" || len(l.ServerPorts) != 2 {
+		t.Errorf("link: %+v", l)
+	}
+	if len(sub.Skipped) != 1 || !strings.Contains(sub.Skipped[0], "пароля") {
+		t.Errorf("skipped: %v", sub.Skipped)
+	}
+}

@@ -72,10 +72,10 @@ func proxyOutbounds(in *Input) ([]any, error) {
 }
 
 // serverOutbounds собирает outbound'ы одного сервера под тегом tag: сам
-// VLESS или urltest по его вариантам.
+// outbound или urltest по его вариантам.
 func serverOutbounds(s subscription.Server, tag string, unique func(string) string) ([]any, error) {
 	if len(s.Links) == 1 {
-		ob, err := vlessOutbound(s.Links[0], tag)
+		ob, err := linkOutbound(s.Links[0], tag)
 		if err != nil && s.Name != "" {
 			err = fmt.Errorf("сервер %q: %w", s.Name, err)
 		}
@@ -88,7 +88,7 @@ func serverOutbounds(s subscription.Server, tag string, unique func(string) stri
 	var variants []string
 	for _, l := range s.Links {
 		vtag := unique(strings.TrimSpace(tag) + " / " + l.Name)
-		ob, err := vlessOutbound(l, vtag)
+		ob, err := linkOutbound(l, vtag)
 		if err != nil {
 			return nil, fmt.Errorf("сервер %q (%s): %w", s.Name, l.Name, err)
 		}
@@ -107,6 +107,41 @@ func urlTest(tag string, outbounds []string) M {
 		"interval":  "5m",
 		"tolerance": 50,
 	}
+}
+
+func linkOutbound(l *vless.Link, tag string) (M, error) {
+	if l.Protocol == "hysteria2" {
+		return hysteria2Outbound(l, tag), nil
+	}
+	return vlessOutbound(l, tag)
+}
+
+func hysteria2Outbound(l *vless.Link, tag string) M {
+	ob := M{
+		"type":        "hysteria2",
+		"tag":         tag,
+		"server":      l.Server,
+		"server_port": l.Port,
+		"password":    l.Password,
+	}
+	if len(l.ServerPorts) > 0 {
+		ob["server_ports"] = l.ServerPorts
+	}
+	if l.Obfs != "" {
+		ob["obfs"] = M{"type": l.Obfs, "password": l.ObfsPassword}
+	}
+	tls := M{"enabled": true}
+	if l.SNI != "" {
+		tls["server_name"] = l.SNI
+	}
+	if l.Insecure {
+		tls["insecure"] = true
+	}
+	if len(l.ALPN) > 0 {
+		tls["alpn"] = l.ALPN
+	}
+	ob["tls"] = tls
+	return ob
 }
 
 func vlessOutbound(l *vless.Link, tag string) (M, error) {

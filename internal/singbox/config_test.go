@@ -226,6 +226,17 @@ func TestSingBoxCheck(t *testing.T) {
 	}
 	singBoxCheck(t, exe, data)
 
+	// Hysteria2 со сменой портов и обфускацией рядом с VLESS.
+	sub, err = subscription.Parse([]byte("vless://id1@a.example.com:443?security=tls#A\nhysteria2://pass@h.example.com:443,20000-30000?obfs=salamander&obfs-password=x&insecure=1#H"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Servers, in.Subscription = sub.Servers, sub
+	if data, err = Build(in); err != nil {
+		t.Fatal(err)
+	}
+	singBoxCheck(t, exe, data)
+
 	// Серверы с несколькими транспортами: вложенные urltest.
 	in.Servers = variantServers()
 	if data, err = Build(in); err != nil {
@@ -342,6 +353,33 @@ func TestBuildServerVariants(t *testing.T) {
 	}
 	if px := byTag[TagProxy]; px["type"] != "urltest" || byTag[TagAuto] != nil || byTag["proxy / nl-rl"] == nil {
 		t.Errorf("один сервер: %v", keys(byTag))
+	}
+}
+
+func TestBuildHysteria2(t *testing.T) {
+	sub, err := subscription.Parse([]byte("hysteria2://user:pw@h.example.com:443,20000-30000/?sni=cdn.example.com&obfs=salamander&obfs-password=x#H"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := profile.Parse([]byte("subscription:\n  url: https://example.com/sub\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := Build(&Input{Profile: p, Servers: sub.Servers, Subscription: sub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg M
+	_ = json.Unmarshal(data, &cfg)
+	var hy M
+	for _, o := range cfg["outbounds"].([]any) {
+		if o.(M)["tag"] == TagProxy {
+			hy = o.(M)
+		}
+	}
+	want := `map[obfs:map[password:x type:salamander] password:user:pw server:h.example.com server_port:443 server_ports:[443:443 20000:30000] tag:proxy tls:map[enabled:true server_name:cdn.example.com] type:hysteria2]`
+	if got := fmt.Sprint(hy); got != want {
+		t.Errorf("outbound:\n got %s\nwant %s", got, want)
 	}
 }
 

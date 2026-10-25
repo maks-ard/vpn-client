@@ -1,5 +1,5 @@
-// Package vless разбирает ссылки вида vless://uuid@host:port?...#name,
-// которые выдают панели 3x-ui, Marzban, Remnawave и т.п.
+// Package vless разбирает ссылки на серверы, которые выдают панели 3x-ui,
+// Marzban, Remnawave и т.п.: vless://uuid@host:port?...#name и hysteria2://.
 package vless
 
 import (
@@ -11,6 +11,9 @@ import (
 )
 
 type Link struct {
+	// Protocol: "" (VLESS) или "hysteria2".
+	Protocol string
+
 	Name   string
 	UUID   string
 	Server string
@@ -33,6 +36,12 @@ type Link struct {
 	ServiceName string
 
 	PacketEncoding string
+
+	// Поля Hysteria2. ServerPorts — диапазоны для смены портов («a:b»).
+	Password     string
+	ServerPorts  []string
+	Obfs         string
+	ObfsPassword string
 }
 
 func Parse(raw string) (*Link, error) {
