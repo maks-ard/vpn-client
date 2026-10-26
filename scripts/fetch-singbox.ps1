@@ -1,7 +1,7 @@
-﻿# Скачивает официальную сборку sing-box для Windows.
-# Использование: .\scripts\fetch-singbox.ps1 [-Version 1.14.3] [-Dest dist]
+# Скачивает официальную сборку sing-box для Windows.
+# Использование: .\scripts\fetch-singbox.ps1 [-Version 1.14.4] [-Dest dist]
 param(
-    [string]$Version = "1.14.3",
+    [string]$Version = "1.14.4",
     [string]$Dest = "dist",
     [ValidateSet("amd64", "arm64", "386")]
     [string]$Arch = "amd64"

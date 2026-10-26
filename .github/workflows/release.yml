@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 env:
-  SING_BOX_VERSION: "1.14.3"
+  SING_BOX_VERSION: "1.14.4"
   VERSION: ${{ inputs.version || github.ref_name }}
 
 jobs:

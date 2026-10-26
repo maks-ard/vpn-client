@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  SING_BOX_VERSION: v1.14.3
+  SING_BOX_VERSION: v1.14.4
   SING_BOX_TAGS: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_clash_api,with_openvpn,badlinkname,tfogo_checklinkname0
 
 jobs:

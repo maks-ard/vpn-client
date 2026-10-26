@@ -32,7 +32,7 @@ go run ./cmd/vpnctl config -p internal/singbox/testdata/profile.yaml   # пос�
 ```bash
 GOTOOLCHAIN=auto GOBIN=$PWD/.bin go install \
   -tags "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_clash_api,with_openvpn,badlinkname,tfogo_checklinkname0" \
-  -ldflags "-checklinkname=0" github.com/sagernet/sing-box/cmd/sing-box@v1.14.3
+  -ldflags "-checklinkname=0" github.com/sagernet/sing-box/cmd/sing-box@v1.14.4
 ```
 
 Перед коммитом должны проходить: `gofmt`, `go vet` (linux и windows), `go test ./...`.
@@ -93,7 +93,7 @@ Wails импортирует только `cmd/vpnclient`: `internal/app` тес
   поля sniff и domain_strategy в inbound, outbound-ы `dns`/`block`,
   `download_detour`. Список — в `docs/deprecated.md` исходников sing-box.
   Новые поля сверяй с документацией в модуле
-  (`$(go env GOMODCACHE)/github.com/sagernet/sing-box@v1.14.3/docs/`), а не по памяти.
+  (`$(go env GOMODCACHE)/github.com/sagernet/sing-box@v1.14.4/docs/`), а не по памяти.
 - Любое изменение генератора проверяй через `TestSingBoxCheck` с настоящим sing-box.
 - Порядок правил маршрутизации важен: корпоративное → категории с направлением
   «OpenVPN» → частные сети → процессы → `proxy_domains` → `direct_domains` →
