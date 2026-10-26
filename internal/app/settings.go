@@ -25,6 +25,9 @@ type Settings struct {
 	OVPNUsername string   `json:"ovpnUsername"`
 	OVPNPassword string   `json:"ovpnPassword"`
 	CorpDomains  []string `json:"corpDomains"`
+	// CorpAdapter — адаптер OpenVPN в Windows с адресом из сети компании
+	// (profile.OpenVPN.SystemInterface).
+	CorpAdapter bool `json:"corpAdapter"`
 
 	// Categories — готовые и свои категории с направлением. Порядок задаёт
 	// приоритет. В старых settings.json поля нет: это то же, что пустой список.
@@ -165,7 +168,8 @@ func (s Settings) profile(p Paths) (*profile.Profile, error) {
 		prof.Subscription = &profile.Subscription{URL: s.Link, Server: s.Server}
 	}
 	if _, err := os.Stat(p.ovpnFile()); err == nil {
-		prof.OpenVPN = &profile.OpenVPN{Config: p.ovpnFile(), Username: s.OVPNUsername, Password: s.OVPNPassword}
+		prof.OpenVPN = &profile.OpenVPN{Config: p.ovpnFile(), Username: s.OVPNUsername, Password: s.OVPNPassword,
+			SystemInterface: s.CorpAdapter}
 		prof.Corporate.Domains = s.CorpDomains
 	}
 	rd := s.RussiaDirect

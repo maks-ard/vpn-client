@@ -9,12 +9,14 @@ import (
 	"fmt"
 	mrand "math/rand/v2"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/maks-ard/vpn-client/internal/corproute"
 	"github.com/maks-ard/vpn-client/internal/killswitch"
 	"github.com/maks-ard/vpn-client/internal/profile"
 	"github.com/maks-ard/vpn-client/internal/runner"
@@ -121,6 +123,9 @@ type Manager struct {
 	guardExe string
 	// keepGuard — идёт переподключение: блокировку не снимать.
 	keepGuard bool
+
+	// ensureRoutes прокладывает маршруты через адаптер OpenVPN; в тестах подменяется.
+	ensureRoutes func(name string, hosts []netip.Addr) (int, error)
 }
 
 func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
@@ -131,7 +136,7 @@ func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
 	}
 	log.redact(s.Link)
 	m := &Manager{paths: paths, onChange: onChange, log: log, settings: s, singBoxPath: os.Getenv("VPNCLIENT_SINGBOX"),
-		handoffCh: make(chan chan handoffReply), newFirewall: enableFirewall}
+		handoffCh: make(chan chan handoffReply), newFirewall: enableFirewall, ensureRoutes: corproute.Ensure}
 	m.state = m.idleState()
 	m.loadSubscriptionInfo()
 	return m, nil
@@ -201,7 +206,7 @@ func (m *Manager) SaveSettings(s Settings) error {
 
 func routingChanged(a, b Settings) bool {
 	return a.Link != b.Link || a.OVPNUsername != b.OVPNUsername || a.OVPNPassword != b.OVPNPassword ||
-		a.RussiaDirect != b.RussiaDirect || strings.Join(a.CorpDomains, ",") != strings.Join(b.CorpDomains, ",") ||
+		a.RussiaDirect != b.RussiaDirect || a.CorpAdapter != b.CorpAdapter || strings.Join(a.CorpDomains, ",") != strings.Join(b.CorpDomains, ",") ||
 		effectiveCategories(a.Categories) != effectiveCategories(b.Categories)
 }
 
@@ -509,6 +514,7 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 	return m.supervise(ctx, &liveSession{proc: proc, api: api, output: output, info: sessionInfo{
 		APIAddr: in.API.Addr, APISecret: in.API.Secret, Servers: len(in.Servers), Corp: in.OpenVPN != nil,
 		CorpDomains: in.Profile.Corporate.Domains, LogLevel: in.Profile.SingBox.LogLevel,
+		CorpAdapter: in.OpenVPN != nil && in.Profile.OpenVPN.SystemInterface,
 	}})
 }
 
@@ -521,6 +527,8 @@ type sessionInfo struct {
 	Corp        bool     `json:"corp"`
 	CorpDomains []string `json:"corpDomains,omitempty"`
 	LogLevel    string   `json:"logLevel"`
+	// CorpAdapter — у OpenVPN свой адаптер в Windows, служба держит маршруты через него.
+	CorpAdapter bool `json:"corpAdapter,omitempty"`
 }
 
 // liveSession — sing-box, который уже поднял API.
@@ -693,6 +701,14 @@ func (m *Manager) monitor(ctx context.Context, api *clash, info sessionInfo) {
 				}
 				sleep(ctx, wait)
 			}
+		}()
+	}
+
+	if info.CorpAdapter {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			m.corpRoutes(ctx, api)
 		}()
 	}
 

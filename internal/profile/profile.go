@@ -44,6 +44,11 @@ type OpenVPN struct {
 	Config   string `yaml:"config"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+	// SystemInterface — адаптер OpenVPN в Windows с адресом из сети
+	// компании, как у обычного клиента OpenVPN. Без него адрес есть только
+	// внутри sing-box, и серверы компании (например, Kaspersky Security
+	// Center) не могут сами подключиться к компьютеру.
+	SystemInterface bool `yaml:"system_interface"`
 }
 
 type Corporate struct {

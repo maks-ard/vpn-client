@@ -47,3 +47,19 @@ func TestParseErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSystemInterface(t *testing.T) {
+	p, err := Parse([]byte("openvpn:\n  config: a.ovpn\n  system_interface: true\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.OpenVPN.SystemInterface {
+		t.Error("system_interface не прочитан")
+	}
+}
+
+func TestExampleProfile(t *testing.T) {
+	if _, err := Load("../../profiles/example.yaml"); err != nil {
+		t.Fatalf("пример профиля не разбирается: %v", err)
+	}
+}

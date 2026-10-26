@@ -438,6 +438,7 @@ function renderSettings() {
   $("opt-connect").checked = settings.connectOnStart;
   $("opt-tray").checked = settings.closeToTray;
   $("opt-killswitch").checked = settings.killSwitch;
+  $("opt-corp-adapter").checked = !!settings.corpAdapter;
 
   // Статус обновления сервис дописывает в конец строки версии.
   const [versionTitle, ...versionRest] = version.split(" · ");
@@ -456,6 +457,7 @@ function renderSettings() {
   $("ovpn-cert").hidden = !loaded || ovpn.needsAuth || !!ovpn.error;
   $("ovpn-auth").hidden = !loaded || !ovpn.needsAuth;
   $("domains-block").hidden = !loaded;
+  $("ovpn-system").hidden = !loaded;
   if (document.activeElement !== $("ovpn-user")) $("ovpn-user").value = settings.ovpnUsername || "";
   if (document.activeElement !== $("ovpn-pass")) $("ovpn-pass").value = settings.ovpnPassword || "";
 
@@ -686,6 +688,7 @@ $("opt-autostart").addEventListener("change", (e) => save({ autostart: e.target.
 $("opt-connect").addEventListener("change", (e) => save({ connectOnStart: e.target.checked }));
 $("opt-tray").addEventListener("change", (e) => save({ closeToTray: e.target.checked }));
 $("opt-killswitch").addEventListener("change", (e) => save({ killSwitch: e.target.checked }));
+$("opt-corp-adapter").addEventListener("change", (e) => save({ corpAdapter: e.target.checked }));
 $("btn-update").addEventListener("click", async () => {
   try {
     await svc("CheckUpdate");

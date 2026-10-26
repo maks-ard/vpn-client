@@ -281,6 +281,10 @@ var (
 	TunAddress6 = netip.MustParsePrefix("fdfe:dcba:9876::1/126")
 )
 
+// CorpInterfaceName — имя адаптера OpenVPN в Windows при
+// openvpn.system_interface; по нему служба находит адаптер для маршрутов.
+const CorpInterfaceName = "vpn-client-corp"
+
 func tunInbound(p *profile.Profile) M {
 	address := []string{TunAddress4.String()}
 	if p.TUN.IPv6 {

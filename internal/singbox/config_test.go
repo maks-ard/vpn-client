@@ -163,6 +163,36 @@ func TestRenegotiateInterval(t *testing.T) {
 	}
 }
 
+func TestOpenVPNSystemInterface(t *testing.T) {
+	cfg := loadTestConfig(t)
+	ep := cfg["endpoints"].([]any)[0].(M)
+	if _, ok := ep["system"]; ok {
+		t.Errorf("без system_interface адаптер не нужен: %v", ep["system"])
+	}
+
+	in, err := Load(context.Background(), "testdata/profile.yaml", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Profile.OpenVPN.SystemInterface = true
+	data, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withAdapter M
+	if err := json.Unmarshal(data, &withAdapter); err != nil {
+		t.Fatal(err)
+	}
+	ep = withAdapter["endpoints"].([]any)[0].(M)
+	if ep["system"] != true || ep["name"] != CorpInterfaceName {
+		t.Errorf("system = %v, name = %v", ep["system"], ep["name"])
+	}
+	// Общий TUN остаётся как был: адаптер только добавляется рядом.
+	if tun := withAdapter["inbounds"].([]any)[0].(M); tun["interface_name"] == CorpInterfaceName || tun["strict_route"] != true {
+		t.Errorf("TUN изменился: %v", tun)
+	}
+}
+
 func TestBuildDNS(t *testing.T) {
 	cfg := loadTestConfig(t)
 	dns := cfg["dns"].(M)
@@ -280,6 +310,13 @@ func TestSingBoxCheck(t *testing.T) {
 	}
 	singBoxCheck(t, exe, data)
 	in.Servers = in.Servers[:1]
+	if data, err = Build(in); err != nil {
+		t.Fatal(err)
+	}
+	singBoxCheck(t, exe, data)
+
+	// Свой адаптер OpenVPN в Windows.
+	in.Profile.OpenVPN.SystemInterface = true
 	if data, err = Build(in); err != nil {
 		t.Fatal(err)
 	}

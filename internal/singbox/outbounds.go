@@ -392,6 +392,14 @@ func openVPNEndpoint(c *ovpn.Config, p *profile.Profile) (M, error) {
 		ep["allow_compression"] = c.AllowCompression
 	}
 
+	if p.OpenVPN.SystemInterface {
+		// Свой адаптер вместо стека внутри sing-box: адрес из пула OpenVPN
+		// появляется в Windows, входящие из сети компании доходят до программ
+		// с настоящим адресом отправителя, а программы по маршрутам через
+		// адаптер выходят в сеть компании с этого адреса.
+		ep["system"] = true
+		ep["name"] = CorpInterfaceName
+	}
 	if c.TunMTU != 0 {
 		ep["mtu"] = c.TunMTU
 	}

@@ -57,6 +57,7 @@ internal/vless/      парсер ссылок vless://
 internal/singbox/    сборка JSON-конфига sing-box
 internal/runner/     запуск/остановка sing-box, распаковка встроенного; *_windows.go / *_other.go
 internal/killswitch/ kill switch: фильтры WFP (fwpuclnt.dll) в динамической сессии службы
+internal/corproute/  маршруты Windows (iphlpapi.dll) через адаптер OpenVPN при «Адрес компании в Windows»
 internal/singboxbin/ sing-box.exe, встроенный в релизную сборку (тег embed_singbox)
 winres/winres.json   иконка, манифест (asInvoker: окно без прав) и версия exe для go-winres
 profiles/example.yaml  пример профиля для vpnctl
@@ -69,7 +70,7 @@ profiles/example.yaml  пример профиля для vpnctl
 его окно открывает напрямую, когда служба не отвечает.
 
 Зависимости направлены строго вниз: `cmd` → `winsvc`/`ipc` → `app` → `singbox` →
-`profile`/`subscription`/`ovpn`/`vless`; `runner` и `killswitch` ни от чего внутреннего не зависят.
+`profile`/`subscription`/`ovpn`/`vless`; `runner`, `killswitch` и `corproute` ни от чего внутреннего не зависят.
 Wails импортирует только `cmd/vpnclient`: `internal/app` тестируется без GUI.
 
 ## GUI
@@ -156,6 +157,14 @@ Wails импортирует только `cmd/vpnclient`: `internal/app` тес
   с app ID `System` разрешены намеренно: KES пересоздаёт в ядре соединения sing-box.
   Настоящие фильтры проверяет `TestEnable` (от администратора,
   `VPNCLIENT_KILLSWITCH_TEST=1`; на пару секунд отключает сеть у всей машины).
+- Маршруты через адаптер OpenVPN (`internal/corproute`, решение владельца) — вторая
+  своя сетевая логика. Включается только настройкой «Адрес компании в Windows»
+  (`openvpn.system_interface`, endpoint с `system: true`). Маршруты ставятся только через
+  этот адаптер и пропадают вместе с ним, когда sing-box завершается. Маршрут по умолчанию
+  через адаптер с метрикой 9999 обязателен: sing-box открывает корпоративные соединения
+  сокетом, привязанным к адаптеру, и без маршрута через него они не открываются (проверено
+  на Linux). Общий TUN держит свой маршрут по умолчанию с метрикой 0, поэтому программы
+  идут через TUN. Маршруты к отдельным адресам ставятся только к частным IPv4.
 
 ## Релизы
 

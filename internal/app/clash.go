@@ -140,6 +140,22 @@ func (c *clash) dnsQuery(ctx context.Context, name string) error {
 	return nil
 }
 
+type clashConnection struct {
+	Metadata struct {
+		DestinationIP string `json:"destinationIP"`
+	} `json:"metadata"`
+	Chains []string `json:"chains"`
+}
+
+// connections — открытые сейчас соединения sing-box.
+func (c *clash) connections(ctx context.Context) ([]clashConnection, error) {
+	var out struct {
+		Connections []clashConnection `json:"connections"`
+	}
+	err := c.do(ctx, http.MethodGet, "/connections", nil, &out)
+	return out.Connections, err
+}
+
 type traffic struct {
 	Up   int64 `json:"up"`
 	Down int64 `json:"down"`
