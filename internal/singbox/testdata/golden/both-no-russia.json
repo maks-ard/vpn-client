@@ -59,6 +59,7 @@
           "text": "block-outside-dns"
         }
       ],
+      "renegotiate_interval": "1200s",
       "servers": [
         {
           "server": "vpn.example.com",

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/maks-ard/vpn-client/internal/ovpn"
 	"github.com/maks-ard/vpn-client/internal/profile"
 	"github.com/maks-ard/vpn-client/internal/subscription"
 	"github.com/maks-ard/vpn-client/internal/vless"
@@ -124,6 +125,41 @@ func TestBuildOpenVPN(t *testing.T) {
 	}
 	if ep["data_ciphers_fallback"] != "AES-256-CBC" || ep["auth"] != "SHA256" {
 		t.Errorf("ciphers: %v %v", ep["data_ciphers_fallback"], ep["auth"])
+	}
+}
+
+func TestRenegotiateInterval(t *testing.T) {
+	tests := []struct {
+		directive string
+		want      any // nil — поля в конфиге нет
+		disabled  bool
+	}{
+		{"", "1200s", false},
+		{"reneg-sec 3600", "1200s", false},
+		{"reneg-sec 600", "600s", false},
+		{"reneg-sec 0", nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.directive, func(t *testing.T) {
+			base, err := os.ReadFile("testdata/corp.ovpn")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := ovpn.Parse(strings.NewReader(string(base)+tt.directive+"\n"), "testdata")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ep, err := openVPNEndpoint(c, &profile.Profile{OpenVPN: &profile.OpenVPN{Username: "u", Password: "p"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ep["renegotiate_interval"]; got != tt.want {
+				t.Errorf("renegotiate_interval = %v, want %v", got, tt.want)
+			}
+			if got := ep["renegotiate_disabled"] == true; got != tt.disabled {
+				t.Errorf("renegotiate_disabled = %v, want %v", got, tt.disabled)
+			}
+		})
 	}
 }
 

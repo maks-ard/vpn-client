@@ -411,8 +411,8 @@ func openVPNEndpoint(c *ovpn.Config, p *profile.Profile) (M, error) {
 	}
 	if c.RenegDisabled {
 		ep["renegotiate_disabled"] = true
-	} else if c.RenegSec > 0 {
-		ep["renegotiate_interval"] = seconds(c.RenegSec)
+	} else {
+		ep["renegotiate_interval"] = seconds(renegotiateSec(c.RenegSec))
 	}
 	if c.RenegBytes > 0 {
 		ep["renegotiate_bytes"] = c.RenegBytes
@@ -455,6 +455,23 @@ func openVPNEndpoint(c *ovpn.Config, p *profile.Profile) (M, error) {
 		ep["block_ipv6"] = true
 	}
 	return ep, nil
+}
+
+// maxRenegotiateSec — как часто клиент сам меняет ключи OpenVPN.
+// sing-box 1.14 (sing-openvpn) не отвечает на смену ключей, начатую
+// сервером: не отправляет свой P_CONTROL_SOFT_RESET_V1, и через hand-window
+// сервер переводит сессию в lame duck, а в его журнале копятся «TLS key
+// negotiation failed» и «stale session-id». Смену, начатую клиентом, сервер
+// принимает, и его таймер reneg-sec (по умолчанию час) отсчитывается
+// заново, так что до своей смены ключей сервер не доходит.
+const maxRenegotiateSec = 20 * 60
+
+// renegotiateSec: значение из .ovpn, но не реже maxRenegotiateSec.
+func renegotiateSec(fromConfig int) int {
+	if fromConfig > 0 && fromConfig < maxRenegotiateSec {
+		return fromConfig
+	}
+	return maxRenegotiateSec
 }
 
 func seconds(n int) string {
