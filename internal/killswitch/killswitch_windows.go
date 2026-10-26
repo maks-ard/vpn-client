@@ -180,7 +180,7 @@ func (f *Firewall) install(rules Rules) ([]uint64, error) {
 	if len(apps) > 0 {
 		both("vpn-client: служба и sing-box", weightApps, fwpActionPermit, apps, apps)
 	}
-	// Антивирусы с проверкой трафика (Kaspersky Endpoint Security) заново
+	// Антивирусы с проверкой трафика заново
 	// открывают уже разрешённые соединения программ из ядра, и WFP видит их
 	// как соединения System. Без этого фильтра блокировались бы соединения
 	// sing-box с серверами VPN. Мимо VPN это не пропускает: соединение самой
