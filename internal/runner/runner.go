@@ -31,8 +31,10 @@ type Options struct {
 	Output io.Writer
 }
 
-// Process — запущенный нами или подхваченный у прошлой версии службы sing-box.
+// Process — запущенный нами или подхваченный у прошлой версии службы sing-box
+// (или другая программа, запущенная через Exec).
 type Process struct {
+	name    string
 	sys     *osProcess
 	done    chan struct{}
 	err     error
@@ -57,17 +59,24 @@ func Start(opts Options) (*Process, error) {
 	cmd.Stdin = bytes.NewReader(opts.Config)
 	cmd.Stdout = opts.Output
 	cmd.Stderr = opts.Output
+	return Exec(cmd, "sing-box")
+}
+
+// Exec запускает cmd так же, как sing-box: в своей группе процессов и в Job
+// Object, чтобы программа завершилась вместе со службой и корректно
+// останавливалась через Stop. name — название программы в ошибках.
+func Exec(cmd *exec.Cmd, name string) (*Process, error) {
 	prepare(cmd)
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("запуск sing-box: %w", err)
+		return nil, fmt.Errorf("запуск %s: %w", name, err)
 	}
-	p := &Process{sys: attach(cmd), done: make(chan struct{})}
+	p := &Process{name: name, sys: attach(cmd), done: make(chan struct{})}
 	go func() {
 		err := cmd.Wait()
 		if err != nil {
-			err = fmt.Errorf("sing-box завершился: %w", err)
+			err = fmt.Errorf("%s завершился: %w", name, err)
 		} else {
-			err = errors.New("sing-box неожиданно завершился")
+			err = fmt.Errorf("%s неожиданно завершился", name)
 		}
 		p.finish(err)
 	}()
@@ -81,7 +90,7 @@ func Adopt(h Handoff, exe string) (*Process, error) {
 	if err != nil {
 		return nil, fmt.Errorf("подхват sing-box: %w", err)
 	}
-	p := &Process{sys: sys, done: make(chan struct{})}
+	p := &Process{name: "sing-box", sys: sys, done: make(chan struct{})}
 	go func() {
 		code, err := sys.wait()
 		switch {
