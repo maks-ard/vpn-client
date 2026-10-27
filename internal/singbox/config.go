@@ -66,6 +66,9 @@ type Input struct {
 	// Inbound заменяет TUN другим inbound (например, mixed): нужно для
 	// тестов, где нет прав на создание TUN.
 	Inbound M
+	// CorpLink — корпоративная сеть через системный OpenVPN; nil — через
+	// endpoint OpenVPN внутри sing-box.
+	CorpLink *CorpLink
 }
 
 type API struct {
@@ -170,8 +173,12 @@ func (in *Input) Warnings() []string {
 	if in.OpenVPN == nil {
 		return w
 	}
-	for _, s := range in.OpenVPN.Warnings {
-		w = append(w, "openvpn: "+s)
+	// Замечания разбора .ovpn касаются endpoint sing-box: системный OpenVPN
+	// понимает конфиг сам.
+	if in.CorpLink == nil {
+		for _, s := range in.OpenVPN.Warnings {
+			w = append(w, "openvpn: "+s)
+		}
 	}
 	if in.OpenVPN.RedirectGateway {
 		w = append(w, "openvpn: redirect-gateway в .ovpn проигнорирован, через OpenVPN идут только корпоративные адреса")
@@ -230,7 +237,18 @@ func build(in *Input) (M, error) {
 		outbounds = append(outbounds, obs...)
 	}
 	var endpoints []any
-	if hasCorp {
+	if hasCorp && in.CorpLink != nil {
+		// Соединения через адаптер системного OpenVPN; пока его нет, правила
+		// с OpenVPN заменены отказом, и outbound не нужен.
+		if !in.corpOffline() {
+			corp := M{"type": "direct", "tag": TagCorp, "bind_interface": in.CorpLink.Interface}
+			// Имена, которые outbound разрешает сам, — тоже через DNS компании.
+			if server := in.corpDNSServer(); server == TagDNSCorp {
+				corp["domain_resolver"] = server
+			}
+			outbounds = append(outbounds, corp)
+		}
+	} else if hasCorp {
 		ep, err := openVPNEndpoint(in.OpenVPN, p)
 		if err != nil {
 			return nil, err
@@ -272,7 +290,15 @@ func inbound(in *Input) M {
 	if in.Inbound != nil {
 		return in.Inbound
 	}
-	return tunInbound(in.Profile)
+	tun := tunInbound(in.Profile)
+	if in.CorpLink != nil && len(in.CorpLink.Servers) > 0 {
+		var exclude []string
+		for _, a := range in.CorpLink.Servers {
+			exclude = append(exclude, netip.PrefixFrom(a, a.BitLen()).String())
+		}
+		tun["route_exclude_address"] = exclude
+	}
+	return tun
 }
 
 // Адреса TUN. По ним kill switch отличает соединения, идущие через VPN.
@@ -324,7 +350,16 @@ func routeRuleList(in *Input, cats resolved, hasProxy, hasCorp bool) []labeledRu
 			add("корпоративные домены", M{"domain_suffix": p.Corporate.Domains, "outbound": TagCorp})
 		}
 		// Подсети и домены, которые прислал сервер OpenVPN.
-		add("маршруты от сервера OpenVPN", M{"preferred_by": []string{TagCorp}, "outbound": TagCorp})
+		if l := in.CorpLink; l != nil {
+			if len(l.Domains) > 0 {
+				add("домены от сервера OpenVPN", M{"domain_suffix": l.Domains, "outbound": TagCorp})
+			}
+			if routes := in.corpRoutes(); len(routes) > 0 {
+				add("маршруты от сервера OpenVPN", M{"ip_cidr": routes, "outbound": TagCorp})
+			}
+		} else {
+			add("маршруты от сервера OpenVPN", M{"preferred_by": []string{TagCorp}, "outbound": TagCorp})
+		}
 		if len(p.Corporate.Subnets) > 0 {
 			add("корпоративные подсети", M{"ip_cidr": p.Corporate.Subnets, "outbound": TagCorp})
 		}
@@ -357,6 +392,9 @@ func routeSection(in *Input, hasProxy, hasCorp bool, final string) M {
 	}
 	for _, r := range routeRuleList(in, cats, hasProxy, hasCorp) {
 		rules = append(rules, r.rule)
+	}
+	if in.corpOffline() {
+		rules = rejectCorp(rules)
 	}
 	route := M{
 		"final":                   final,
@@ -437,20 +475,39 @@ func dnsSection(in *Input, hasProxy, hasCorp bool) (M, error) {
 		final = TagDNSRemote
 	}
 	if hasCorp {
-		servers = append(servers, M{
-			"type":     "openvpn",
-			"tag":      TagDNSCorp,
-			"endpoint": TagCorp,
-			// Корпоративные домены резолвим DNS-серверами из OpenVPN,
-			// даже если сервер не прислал для них DOMAIN-ROUTE.
-			"accept_default_resolvers": true,
-			"accept_search_domain":     true,
-		})
-		if len(p.Corporate.Domains) > 0 {
-			rules = append(rules, M{"domain_suffix": p.Corporate.Domains, "server": TagDNSCorp})
+		var corpRules []any
+		if l := in.CorpLink; l != nil {
+			if in.corpDNSServer() == TagDNSCorp {
+				servers = append(servers, M{
+					"type":           "udp",
+					"tag":            TagDNSCorp,
+					"server":         l.dnsServer().String(),
+					"bind_interface": l.Interface,
+				})
+			}
+			if len(p.Corporate.Domains) > 0 {
+				corpRules = append(corpRules, M{"domain_suffix": p.Corporate.Domains, "server": TagDNSCorp})
+			}
+			if len(l.Domains) > 0 {
+				corpRules = append(corpRules, M{"domain_suffix": l.Domains, "server": TagDNSCorp})
+			}
+		} else {
+			servers = append(servers, M{
+				"type":     "openvpn",
+				"tag":      TagDNSCorp,
+				"endpoint": TagCorp,
+				// Корпоративные домены резолвим DNS-серверами из OpenVPN,
+				// даже если сервер не прислал для них DOMAIN-ROUTE.
+				"accept_default_resolvers": true,
+				"accept_search_domain":     true,
+			})
+			if len(p.Corporate.Domains) > 0 {
+				corpRules = append(corpRules, M{"domain_suffix": p.Corporate.Domains, "server": TagDNSCorp})
+			}
+			corpRules = append(corpRules, M{"preferred_by": []string{TagDNSCorp}, "server": TagDNSCorp})
 		}
-		rules = append(rules, M{"preferred_by": []string{TagDNSCorp}, "server": TagDNSCorp})
-		rules = append(rules, cats.dnsRules(true)...)
+		corpRules = append(corpRules, cats.dnsRules(true)...)
+		rules = append(rules, retargetCorpDNS(corpRules, in.corpDNSServer())...)
 	}
 	if hasProxy && len(p.Routing.ProxyDomains) > 0 {
 		rules = append(rules, M{"domain_suffix": p.Routing.ProxyDomains, "server": TagDNSRemote})
