@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -196,5 +197,30 @@ func TestKillSwitchWithSingBox(t *testing.T) {
 	m.Disconnect()
 	if _, _, c := fw.counts(); c != 1 || m.State().KillSwitch {
 		t.Fatalf("после отключения: closed=%d state=%+v", c, m.State())
+	}
+}
+
+func TestGuardSystemOpenVPN(t *testing.T) {
+	m, fw := newGuardManager(t, true)
+	m.guard("/data/sing-box")
+	// Адрес компании появляется, когда OpenVPN подключился: правила
+	// обновляются на лету, блокировка не снимается.
+	local := netip.MustParseAddr("10.8.0.2")
+	m.guardCorp("/ovpn/openvpn", local)
+	fw.mu.Lock()
+	last := fw.last
+	fw.mu.Unlock()
+	if !slices.Contains(last.Apps, "/ovpn/openvpn") || !slices.Contains(last.Tunnel, local) {
+		t.Errorf("правила: %+v", last)
+	}
+	m.guardCorp("", netip.Addr{})
+	fw.mu.Lock()
+	last = fw.last
+	fw.mu.Unlock()
+	if slices.Contains(last.Apps, "/ovpn/openvpn") || slices.Contains(last.Tunnel, local) {
+		t.Errorf("разрешения OpenVPN остались после его остановки: %+v", last)
+	}
+	if enabled, _, closed := fw.counts(); enabled != 1 || closed != 0 {
+		t.Errorf("блокировка включалась %d раз, снималась %d", enabled, closed)
 	}
 }

@@ -19,7 +19,7 @@ func TestReconnectPauseCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	done := make(chan error, 1)
-	go func() { done <- m.session(ctx, Settings{}) }()
+	go func() { done <- m.session(ctx, Settings{}, nil) }()
 	select {
 	case err := <-done:
 		if err != nil {

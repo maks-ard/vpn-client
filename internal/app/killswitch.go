@@ -106,7 +106,29 @@ func (m *Manager) guardRules() killswitch.Rules {
 	if m.guardExe != "" {
 		rules.Apps = append(rules.Apps, m.guardExe)
 	}
+	// Системный OpenVPN ходит к своему серверу мимо TUN, а программы — в
+	// сеть компании через его адаптер, со своего адреса в ней.
+	if m.corpExe != "" {
+		rules.Apps = append(rules.Apps, m.corpExe)
+	}
+	if m.corpLocal.IsValid() {
+		rules.Tunnel = append(rules.Tunnel, m.corpLocal)
+	}
 	return rules
+}
+
+// guardCorp разрешает системный OpenVPN (exe) и соединения с его адреса
+// local; пустой exe убирает разрешения.
+func (m *Manager) guardCorp(exe string, local netip.Addr) {
+	m.guardMu.Lock()
+	defer m.guardMu.Unlock()
+	if m.corpExe == exe && m.corpLocal == local {
+		return
+	}
+	m.corpExe, m.corpLocal = exe, local
+	if m.firewall != nil {
+		m.syncGuard()
+	}
 }
 
 // singBoxExe — путь sing-box, который запустил бы m.singBox; нужен для

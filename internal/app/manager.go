@@ -18,6 +18,7 @@ import (
 
 	"github.com/maks-ard/vpn-client/internal/corproute"
 	"github.com/maks-ard/vpn-client/internal/killswitch"
+	"github.com/maks-ard/vpn-client/internal/openvpn"
 	"github.com/maks-ard/vpn-client/internal/profile"
 	"github.com/maks-ard/vpn-client/internal/runner"
 	"github.com/maks-ard/vpn-client/internal/singbox"
@@ -94,6 +95,8 @@ type Manager struct {
 	inbound singbox.M
 	// singBoxPath — внешний sing-box вместо встроенного (для разработки).
 	singBoxPath string
+	// openVPNPath — openvpn вместо найденного в системе (для разработки).
+	openVPNPath string
 	// fetchSet скачивает rule-set для проверки адреса; в тестах подменяется.
 	fetchSet func(ctx context.Context, url string) ([]byte, error)
 
@@ -113,6 +116,8 @@ type Manager struct {
 	// handedOff — sing-box отдан новой версии службы: новое подключение
 	// создало бы второй TUN рядом с работающим.
 	handedOff bool
+	// system — системный OpenVPN текущей сессии.
+	system    *systemVPN
 	handoffCh chan chan handoffReply
 
 	// guardMu защищает kill switch; берётся раньше mu.
@@ -123,6 +128,9 @@ type Manager struct {
 	guardExe string
 	// keepGuard — идёт переподключение: блокировку не снимать.
 	keepGuard bool
+	// corpExe и corpLocal — системный OpenVPN и его адрес в сети компании.
+	corpExe   string
+	corpLocal netip.Addr
 
 	// ensureRoutes прокладывает маршруты через адаптер OpenVPN; в тестах подменяется.
 	ensureRoutes func(name string, hosts []netip.Addr) (int, error)
@@ -136,7 +144,8 @@ func NewManager(paths Paths, onChange func(State)) (*Manager, error) {
 	}
 	log.redact(s.Link)
 	m := &Manager{paths: paths, onChange: onChange, log: log, settings: s, singBoxPath: os.Getenv("VPNCLIENT_SINGBOX"),
-		handoffCh: make(chan chan handoffReply), newFirewall: enableFirewall, ensureRoutes: corproute.Ensure}
+		openVPNPath: os.Getenv("VPNCLIENT_OPENVPN"),
+		handoffCh:   make(chan chan handoffReply), newFirewall: enableFirewall, ensureRoutes: corproute.Ensure}
 	m.state = m.idleState()
 	m.loadSubscriptionInfo()
 	return m, nil
@@ -150,7 +159,11 @@ func (m *Manager) Settings() Settings {
 	return m.settings
 }
 
-func (m *Manager) OVPN() OVPNInfo { return ovpnInfo(m.paths) }
+func (m *Manager) OVPN() OVPNInfo {
+	info := ovpnInfo(m.paths)
+	info.SystemOpenVPN, _ = m.openVPNExe()
+	return info
+}
 
 // SaveSettings сохраняет настройки. Если VPN подключён и поменялось то,
 // что влияет на маршруты, он переподключается.
@@ -206,7 +219,7 @@ func (m *Manager) SaveSettings(s Settings) error {
 
 func routingChanged(a, b Settings) bool {
 	return a.Link != b.Link || a.OVPNUsername != b.OVPNUsername || a.OVPNPassword != b.OVPNPassword ||
-		a.RussiaDirect != b.RussiaDirect || a.CorpAdapter != b.CorpAdapter || strings.Join(a.CorpDomains, ",") != strings.Join(b.CorpDomains, ",") ||
+		a.RussiaDirect != b.RussiaDirect || a.CorpAdapter != b.CorpAdapter || a.SystemOpenVPN != b.SystemOpenVPN || strings.Join(a.CorpDomains, ",") != strings.Join(b.CorpDomains, ",") ||
 		effectiveCategories(a.Categories) != effectiveCategories(b.Categories)
 }
 
@@ -368,16 +381,26 @@ func (m *Manager) DisconnectWithReason(reason string) {
 func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}, adopted *liveSession) {
 	defer close(done)
 	var err error
+	var sys *systemVPN
 	if adopted != nil {
 		m.guard(m.singBoxExe())
-		err = m.supervise(ctx, adopted)
+		err = m.supervise(ctx, adopted, nil, nil)
 		adopted.release()
-	} else {
-		err = m.session(ctx, settings)
+	} else if sys, err = m.systemVPNFor(ctx, settings); err == nil {
+		err = m.session(ctx, settings, sys)
 	}
 	// Повторяем, только если связь уже была установлена и оборвалась.
 	// Ошибки профиля и запуска так не лечатся и сразу показываются пользователю.
-	for attempt := 1; ctx.Err() == nil && (errors.Is(err, errProcessExited) || errors.Is(err, errCorpTerminated)); attempt++ {
+	for attempt := 1; ctx.Err() == nil && (errors.Is(err, errProcessExited) || errors.Is(err, errCorpTerminated) ||
+		errors.Is(err, errCorpChanged)); attempt++ {
+		if errors.Is(err, errCorpChanged) {
+			// Не обрыв: sing-box перезапускается с адаптером и DNS из нового
+			// подключения OpenVPN.
+			m.Logf("%v, перезапуск sing-box", err)
+			attempt--
+			err = m.session(ctx, settings, sys)
+			continue
+		}
 		reason := "sing-box завершился"
 		if errors.Is(err, errCorpTerminated) {
 			reason = err.Error()
@@ -388,7 +411,10 @@ func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}
 		if ctx.Err() != nil {
 			break
 		}
-		err = m.session(ctx, settings)
+		err = m.session(ctx, settings, sys)
+	}
+	if sys != nil {
+		sys.stop()
 	}
 
 	// Новая версия службы ставит свою блокировку, когда подхватит sing-box.
@@ -429,7 +455,7 @@ func (m *Manager) run(ctx context.Context, settings Settings, done chan struct{}
 	m.notify(state)
 }
 
-func (m *Manager) session(ctx context.Context, settings Settings) error {
+func (m *Manager) session(ctx context.Context, settings Settings, sys *systemVPN) error {
 	m.mu.Lock()
 	wait := time.Until(m.nextConnect)
 	m.mu.Unlock()
@@ -471,6 +497,17 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 	// Наборы категорий скачиваются и проверяются заранее: недоступная ссылка
 	// на набор не должна мешать запуску sing-box.
 	in.LocalSets = m.prepareRuleSets(ctx, exe, in)
+	var link *openvpn.Link
+	if sys != nil && in.OpenVPN != nil {
+		// Адаптер и DNS компании известны только после подключения OpenVPN.
+		if link = sys.wait(ctx, corpStartWait); ctx.Err() != nil {
+			return nil
+		}
+		if link == nil {
+			m.log.Printf("OpenVPN ещё не подключился: корпоративная сеть недоступна, пока он не подключится")
+		}
+		in.CorpLink = sys.corpLink(link)
+	}
 	for _, s := range in.Skipped() {
 		m.log.Printf("подписка: пропущен сервер: %s", s)
 	}
@@ -515,7 +552,7 @@ func (m *Manager) session(ctx context.Context, settings Settings) error {
 		APIAddr: in.API.Addr, APISecret: in.API.Secret, Servers: len(in.Servers), Corp: in.OpenVPN != nil,
 		CorpDomains: in.Profile.Corporate.Domains, LogLevel: in.Profile.SingBox.LogLevel,
 		CorpAdapter: in.OpenVPN != nil && in.Profile.OpenVPN.SystemInterface,
-	}})
+	}}, sys, link)
 }
 
 // sessionInfo — что нужно для наблюдения за работающим sing-box; передаётся
@@ -549,8 +586,9 @@ func (s *liveSession) release() {
 }
 
 // supervise следит за работающим sing-box, пока его не остановят, он не
-// завершится сам или не будет передан новой версии службы.
-func (m *Manager) supervise(ctx context.Context, live *liveSession) error {
+// завершится сам или не будет передан новой версии службы. sys — системный
+// OpenVPN, link — его подключение, с которым собран конфиг sing-box.
+func (m *Manager) supervise(ctx context.Context, live *liveSession, sys *systemVPN, link *openvpn.Link) error {
 	m.mu.Lock()
 	m.api = live.api
 	m.mu.Unlock()
@@ -583,6 +621,10 @@ func (m *Manager) supervise(ctx context.Context, live *liveSession) error {
 	}()
 
 	corpDown := live.output.corpDown
+	var corpChanged <-chan struct{}
+	if sys != nil {
+		corpChanged = sys.changed
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -590,7 +632,21 @@ func (m *Manager) supervise(ctx context.Context, live *liveSession) error {
 			return nil
 		case <-live.proc.Done():
 			return fmt.Errorf("%w: %v%s", errProcessExited, live.proc.Err(), m.log.tailHint())
+		case <-corpChanged:
+			// Обрыв OpenVPN sing-box переживает: соединения через адаптер
+			// просто не открываются. Перезапуск нужен, только если OpenVPN
+			// подключился с другим адаптером, DNS или маршрутами.
+			if l := sys.Link(); l != nil && !l.Equal(link) {
+				live.proc.Stop()
+				return errCorpChanged
+			}
 		case reply := <-m.handoffCh:
+			if sys != nil {
+				// openvpn.exe новая версия службы подхватить не умеет: VPN
+				// работал бы без корпоративной сети.
+				reply <- handoffReply{err: errors.New("корпоративная сеть идёт через системный OpenVPN")}
+				continue
+			}
 			h, err := live.proc.Handoff()
 			if err != nil {
 				reply <- handoffReply{err: err}
@@ -721,7 +777,18 @@ func (m *Manager) monitor(ctx context.Context, api *clash, info sessionInfo) {
 			if everUp {
 				detail = corpReconnecting
 			}
-			if len(domains) == 0 {
+			m.mu.Lock()
+			sys := m.system
+			m.mu.Unlock()
+			if sys != nil && sys.Link() == nil {
+				// Системный OpenVPN подключается; причину сбоя он пишет в
+				// состояние сам, её не перетираем.
+				sleep(ctx, 2*time.Second)
+				continue
+			}
+			if len(domains) == 0 && sys != nil {
+				up, detail = true, "работает"
+			} else if len(domains) == 0 {
 				up, detail = false, "нет домена для проверки доступа"
 			} else {
 				reqCtx, cancel := context.WithTimeout(ctx, 6*time.Second)

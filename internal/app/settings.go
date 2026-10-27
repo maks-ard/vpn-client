@@ -28,6 +28,10 @@ type Settings struct {
 	// CorpAdapter — адаптер OpenVPN в Windows с адресом из сети компании
 	// (profile.OpenVPN.SystemInterface).
 	CorpAdapter bool `json:"corpAdapter"`
+	// SystemOpenVPN — корпоративная сеть через OpenVPN, установленный в
+	// Windows (openvpn.exe), а не через встроенный в sing-box. Адрес компании
+	// тогда есть в Windows всегда, и CorpAdapter не нужен.
+	SystemOpenVPN bool `json:"systemOpenVPN"`
 
 	// Categories — готовые и свои категории с направлением. Порядок задаёт
 	// приоритет. В старых settings.json поля нет: это то же, что пустой список.
@@ -49,6 +53,8 @@ type OVPNInfo struct {
 	Server    string `json:"server"`
 	NeedsAuth bool   `json:"needsAuth"`
 	Error     string `json:"error,omitempty"`
+	// SystemOpenVPN — путь к найденному openvpn.exe; пусто — OpenVPN не установлен.
+	SystemOpenVPN string `json:"systemOpenVPN,omitempty"`
 }
 
 func defaultSettings() Settings {
@@ -169,7 +175,7 @@ func (s Settings) profile(p Paths) (*profile.Profile, error) {
 	}
 	if _, err := os.Stat(p.ovpnFile()); err == nil {
 		prof.OpenVPN = &profile.OpenVPN{Config: p.ovpnFile(), Username: s.OVPNUsername, Password: s.OVPNPassword,
-			SystemInterface: s.CorpAdapter}
+			SystemInterface: s.CorpAdapter && !s.SystemOpenVPN}
 		prof.Corporate.Domains = s.CorpDomains
 	}
 	rd := s.RussiaDirect
