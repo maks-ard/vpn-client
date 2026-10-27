@@ -439,6 +439,7 @@ function renderSettings() {
   $("opt-tray").checked = settings.closeToTray;
   $("opt-killswitch").checked = settings.killSwitch;
   $("opt-corp-adapter").checked = !!settings.corpAdapter;
+  $("opt-system-openvpn").checked = !!settings.systemOpenVPN;
 
   // Статус обновления сервис дописывает в конец строки версии.
   const [versionTitle, ...versionRest] = version.split(" · ");
@@ -457,7 +458,16 @@ function renderSettings() {
   $("ovpn-cert").hidden = !loaded || ovpn.needsAuth || !!ovpn.error;
   $("ovpn-auth").hidden = !loaded || !ovpn.needsAuth;
   $("domains-block").hidden = !loaded;
-  $("ovpn-system").hidden = !loaded;
+  // Переключатель виден и без найденного OpenVPN, если уже включён: иначе его не выключить.
+  const systemFound = !!ovpn?.systemOpenVPN;
+  $("ovpn-engine").hidden = !loaded || (!systemFound && !settings.systemOpenVPN);
+  $("ovpn-engine-sub").textContent = systemFound
+    ? "Установленный OpenVPN вместо встроенного. Адрес компании в Windows есть всегда"
+    : "OpenVPN не найден на компьютере, используется встроенный";
+  $("ovpn-engine").title = systemFound ? ovpn.systemOpenVPN : "";
+  $("ovpn-engine-sub").classList.toggle("bad", !systemFound);
+  // У системного OpenVPN свой адаптер с адресом компании: отдельная настройка не нужна.
+  $("ovpn-system").hidden = !loaded || !!settings.systemOpenVPN;
   if (document.activeElement !== $("ovpn-user")) $("ovpn-user").value = settings.ovpnUsername || "";
   if (document.activeElement !== $("ovpn-pass")) $("ovpn-pass").value = settings.ovpnPassword || "";
 
@@ -689,6 +699,7 @@ $("opt-connect").addEventListener("change", (e) => save({ connectOnStart: e.targ
 $("opt-tray").addEventListener("change", (e) => save({ closeToTray: e.target.checked }));
 $("opt-killswitch").addEventListener("change", (e) => save({ killSwitch: e.target.checked }));
 $("opt-corp-adapter").addEventListener("change", (e) => save({ corpAdapter: e.target.checked }));
+$("opt-system-openvpn").addEventListener("change", (e) => save({ systemOpenVPN: e.target.checked }));
 $("btn-update").addEventListener("click", async () => {
   try {
     await svc("CheckUpdate");

@@ -199,6 +199,7 @@ button.list-row:hover, label.list-row:hover { background: var(--surface-hover); 
 .list-row.static { cursor: default; }
 .row-title { flex: 1; font-size: 14px; }
 .row-sub { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.row-sub.bad { color: var(--amber); }
 
 /* Проверка доступа и подписка */
 .checks-meta { gap: 2px; font-size: 12px; color: var(--muted); }
