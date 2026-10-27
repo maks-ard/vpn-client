@@ -103,7 +103,8 @@ export function createRules(ctx) {
     const s = getSettings();
     const state = getState();
     const configured = configuredCount(s.categories, s.russiaDirect);
-    const rest = state?.proxy?.enabled || /^vless:|^https?:/i.test(s.link || "") ? "через VLESS" : "напрямую";
+    const vless = !s.proxyDisabled && (state?.proxy?.enabled || /^vless:|^https?:/i.test(s.link || ""));
+    const rest = vless ? "через VLESS" : "напрямую";
     return [
       el("h1", "page-title pad", "Правила"),
       group("Общие правила", card(navRow({

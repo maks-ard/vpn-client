@@ -114,6 +114,73 @@ func TestSettingsCategories(t *testing.T) {
 	}
 }
 
+func TestSettingsDisabledRoutes(t *testing.T) {
+	p := testPaths(t)
+	if err := os.MkdirAll(p.Config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	corp, err := os.ReadFile("../singbox/testdata/corp.ovpn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.ovpnFile(), corp, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cats := []profile.Category{
+		{ID: "video", Preset: true, Action: profile.ActionProxy},
+		{ID: "c-1", Name: "Работа", Action: profile.ActionCorp, Rules: []profile.Rule{{Type: profile.RuleDomain, Value: "jira.example"}}},
+		{ID: "ads", Preset: true, Action: profile.ActionBlock},
+	}
+	base := Settings{Link: legacyVLESS, CorpDomains: []string{"corp.example.com"}, Categories: cats}
+
+	cases := []struct {
+		name        string
+		corp, proxy bool
+		vless, ovpn bool
+		categories  []string
+	}{
+		{"оба включены", false, false, true, true, []string{"video", "c-1", "ads"}},
+		{"без корпоративной сети", true, false, true, false, []string{"video", "ads"}},
+		{"без зарубежных сайтов", false, true, false, true, []string{"c-1", "ads"}},
+	}
+	for _, c := range cases {
+		s := base
+		s.CorpDisabled, s.ProxyDisabled = c.corp, c.proxy
+		prof, err := s.profile(p)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if (prof.VLESS != "") != c.vless || (prof.OpenVPN != nil) != c.ovpn {
+			t.Errorf("%s: VLESS=%q, OpenVPN=%v", c.name, prof.VLESS, prof.OpenVPN != nil)
+		}
+		if !c.ovpn && len(prof.Corporate.Domains) != 0 {
+			t.Errorf("%s: корпоративные домены без OpenVPN: %v", c.name, prof.Corporate.Domains)
+		}
+		var ids []string
+		for _, cat := range prof.Routing.Categories {
+			ids = append(ids, cat.ID)
+		}
+		if strings.Join(ids, ",") != strings.Join(c.categories, ",") {
+			t.Errorf("%s: категории %v, ожидались %v", c.name, ids, c.categories)
+		}
+	}
+
+	both := base
+	both.CorpDisabled, both.ProxyDisabled = true, true
+	if _, err := both.profile(p); err == nil || !strings.Contains(err.Error(), "выключены") {
+		t.Errorf("оба выключены: %v", err)
+	}
+	if !both.allDisabled(p) || base.allDisabled(p) {
+		t.Error("allDisabled не совпадает с настройками")
+	}
+	if onlyCorp := (Settings{ProxyDisabled: true}); onlyCorp.allDisabled(p) {
+		t.Error("без подписки выключенный VLESS не выключает корпоративную сеть")
+	}
+	if !routingChanged(base, Settings{Link: base.Link, CorpDomains: base.CorpDomains, Categories: cats, ProxyDisabled: true}) {
+		t.Error("выключение VLESS должно переподключать VPN")
+	}
+}
+
 func TestRoutingChangedCategories(t *testing.T) {
 	ads := profile.Category{ID: "ads", Preset: true, Action: profile.ActionBlock}
 	video := profile.Category{ID: "video", Preset: true, Action: profile.ActionProxy}

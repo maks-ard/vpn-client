@@ -213,8 +213,14 @@ function renderMain() {
   // Корпоративная сеть
   const corp = state.corp;
   const active = st === "connecting" || st === "connected";
-  if (!corp.enabled) {
+  // Переключатель есть только у настроенного подключения.
+  $("corp-switch").hidden = !corp.enabled && !corp.off;
+  $("opt-corp-on").checked = !corp.off;
+  if (!corp.enabled && !corp.off) {
     $("corp-sub").textContent = "Не настроено · загрузите .ovpn";
+    setBadge($("corp-badge"), null, "");
+  } else if (corp.off) {
+    $("corp-sub").textContent = "Выключено";
     setBadge($("corp-badge"), null, "");
   } else if (!active) {
     $("corp-sub").textContent = "OpenVPN · " + (corp.domains || "подсети от сервера");
@@ -231,7 +237,12 @@ function renderMain() {
 
   // Зарубежные сайты
   const px = state.proxy;
-  if (!px.enabled) {
+  $("proxy-switch").hidden = !px.enabled && !px.off;
+  $("opt-proxy-on").checked = !px.off;
+  if (px.off) {
+    $("proxy-sub").replaceChildren("Выключено · напрямую");
+    setBadge($("proxy-badge"), null, "");
+  } else if (!px.enabled) {
     $("proxy-sub").replaceChildren("Не настроено · добавьте подписку");
     setBadge($("proxy-badge"), null, "");
   } else {
@@ -324,6 +335,26 @@ $("power").addEventListener("click", () => {
 });
 $("btn-retry").addEventListener("click", () => svc("Toggle").catch(showError));
 $("btn-error-copy").addEventListener("click", () => copy(state?.error));
+
+// Подключения включаются и выключаются сразу, без панели «Применить»:
+// это не правка настроек, а выбор, что нужно сейчас.
+async function setRoute(patch, input, text) {
+  input.disabled = true;
+  try {
+    await svc("SaveSettings", { ...(savedSettings || settings), ...patch });
+    for (const s of [draft, savedSettings, previousSettings]) if (s) Object.assign(s, patch);
+    await reloadSettings();
+    showToast(text, "info");
+  } catch (e) {
+    input.checked = !input.checked;
+    showError(e);
+  } finally { input.disabled = false; }
+}
+
+$("opt-corp-on").addEventListener("change", (e) => setRoute({ corpDisabled: !e.target.checked }, e.target,
+  e.target.checked ? "Корпоративная сеть включена" : "Корпоративная сеть выключена"));
+$("opt-proxy-on").addEventListener("change", (e) => setRoute({ proxyDisabled: !e.target.checked }, e.target,
+  e.target.checked ? "Зарубежные сайты включены" : "Зарубежные сайты выключены"));
 
 $("route-corp").addEventListener("click", () => showPage("settings"));
 $("route-proxy").addEventListener("click", () => {

@@ -57,10 +57,14 @@ type CorpState struct {
 	Up      bool   `json:"up"`
 	Detail  string `json:"detail"`
 	Domains string `json:"domains"`
+	// Off — профиль загружен, но пользователь выключил корпоративную сеть.
+	Off bool `json:"off,omitempty"`
 }
 
 type ProxyState struct {
 	Enabled bool `json:"enabled"`
+	// Off — подписка указана, но пользователь выключил зарубежные сайты.
+	Off bool `json:"off,omitempty"`
 	// Selected — выбор пользователя: "auto" или имя сервера.
 	Selected string `json:"selected"`
 	// Current — сервер, через который реально идёт трафик.
@@ -195,7 +199,11 @@ func (m *Manager) SaveSettings(s Settings) error {
 	if old.Link != s.Link {
 		go m.RefreshSubscription(context.Background())
 	}
-	if active && routingChanged(old, s) {
+	if active && routingChanged(old, s) && s.allDisabled(m.paths) {
+		// Выключить последнее подключение — то же, что выключить VPN:
+		// переподключение закончилось бы ошибкой «оба подключения выключены».
+		m.DisconnectWithReason("все подключения выключены")
+	} else if active && routingChanged(old, s) {
 		m.log.Printf("настройки изменены, переподключение")
 		m.restart("изменение настроек маршрутизации")
 	} else if active && old.KillSwitch != s.KillSwitch {
@@ -207,6 +215,7 @@ func (m *Manager) SaveSettings(s Settings) error {
 func routingChanged(a, b Settings) bool {
 	return a.Link != b.Link || a.OVPNUsername != b.OVPNUsername || a.OVPNPassword != b.OVPNPassword ||
 		a.RussiaDirect != b.RussiaDirect || a.CorpAdapter != b.CorpAdapter || strings.Join(a.CorpDomains, ",") != strings.Join(b.CorpDomains, ",") ||
+		a.CorpDisabled != b.CorpDisabled || a.ProxyDisabled != b.ProxyDisabled ||
 		effectiveCategories(a.Categories) != effectiveCategories(b.Categories)
 }
 
@@ -943,11 +952,13 @@ func (m *Manager) idleState() State {
 	s := State{Status: StatusDisconnected}
 	info := ovpnInfo(m.paths)
 	s.Corp.Enabled = info.Loaded
+	s.Corp.Off = info.Loaded && m.settings.CorpDisabled
 	s.Corp.Domains = strings.Join(m.settings.CorpDomains, ", ")
 	if info.Loaded {
 		s.Corp.Detail = s.Corp.Domains
 	}
 	s.Proxy.Enabled = m.settings.Link != ""
+	s.Proxy.Off = s.Proxy.Enabled && m.settings.ProxyDisabled
 	s.Proxy.Selected = m.settings.Server
 	if s.Proxy.Selected == "" {
 		s.Proxy.Selected = singbox.TagAuto
@@ -956,7 +967,8 @@ func (m *Manager) idleState() State {
 }
 
 func proxyStateFromInput(in *singbox.Input, settings Settings) ProxyState {
-	p := ProxyState{Enabled: len(in.Servers) > 0, Selected: singbox.TagAuto}
+	p := ProxyState{Enabled: len(in.Servers) > 0, Selected: singbox.TagAuto,
+		Off: settings.Link != "" && settings.ProxyDisabled}
 	for _, s := range in.Servers {
 		p.Servers = append(p.Servers, Server{Name: s.Name})
 		// Сохранённого сервера может уже не быть в подписке — тогда, как и

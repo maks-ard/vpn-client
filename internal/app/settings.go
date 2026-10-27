@@ -21,6 +21,10 @@ type Settings struct {
 	Link string `json:"link"`
 	// Server — выбранный сервер подписки; пусто — самый быстрый.
 	Server string `json:"server"`
+	// ProxyDisabled — VLESS настроен, но выключен: зарубежные сайты идут
+	// напрямую. Флаг «выключено», а не «включено», чтобы старые settings.json
+	// без поля сохранили оба подключения.
+	ProxyDisabled bool `json:"proxyDisabled,omitempty"`
 
 	OVPNUsername string   `json:"ovpnUsername"`
 	OVPNPassword string   `json:"ovpnPassword"`
@@ -28,6 +32,8 @@ type Settings struct {
 	// CorpAdapter — адаптер OpenVPN в Windows с адресом из сети компании
 	// (profile.OpenVPN.SystemInterface).
 	CorpAdapter bool `json:"corpAdapter"`
+	// CorpDisabled — профиль OpenVPN загружен, но не подключается.
+	CorpDisabled bool `json:"corpDisabled,omitempty"`
 
 	// Categories — готовые и свои категории с направлением. Порядок задаёт
 	// приоритет. В старых settings.json поля нет: это то же, что пустой список.
@@ -161,27 +167,59 @@ func (s *Settings) normalize() error {
 // profile собирает профиль для генератора конфига.
 func (s Settings) profile(p Paths) (*profile.Profile, error) {
 	prof := &profile.Profile{}
+	configured := s.Link != ""
 	switch {
+	case s.ProxyDisabled:
 	case strings.HasPrefix(s.Link, "vless://"):
 		prof.VLESS = s.Link
 	case s.Link != "":
 		prof.Subscription = &profile.Subscription{URL: s.Link, Server: s.Server}
 	}
 	if _, err := os.Stat(p.ovpnFile()); err == nil {
-		prof.OpenVPN = &profile.OpenVPN{Config: p.ovpnFile(), Username: s.OVPNUsername, Password: s.OVPNPassword,
-			SystemInterface: s.CorpAdapter}
-		prof.Corporate.Domains = s.CorpDomains
+		configured = true
+		if !s.CorpDisabled {
+			prof.OpenVPN = &profile.OpenVPN{Config: p.ovpnFile(), Username: s.OVPNUsername, Password: s.OVPNPassword,
+				SystemInterface: s.CorpAdapter}
+			prof.Corporate.Domains = s.CorpDomains
+		}
 	}
 	rd := s.RussiaDirect
 	prof.Routing.RussiaDirect = &rd
-	prof.Routing.Categories = s.Categories
+	prof.Routing.Categories = s.activeCategories()
 	if err := prof.Normalize(p.Config); err != nil {
 		if prof.VLESS == "" && prof.Subscription == nil && prof.OpenVPN == nil {
+			if configured {
+				return nil, errors.New("оба подключения выключены: включите корпоративную сеть или зарубежные сайты на главной")
+			}
 			return nil, errors.New("укажите ссылку на подписку или загрузите файл .ovpn в настройках")
 		}
 		return nil, err
 	}
 	return prof, nil
+}
+
+// allDisabled — подключения настроены, но пользователь выключил все.
+func (s Settings) allDisabled(p Paths) bool {
+	_, err := os.Stat(p.ovpnFile())
+	corp := err == nil
+	return (s.Link != "" || corp) && (s.Link == "" || s.ProxyDisabled) && (!corp || s.CorpDisabled)
+}
+
+// activeCategories убирает категории, направленные в выключенное подключение.
+// Пользователь выключил его сам, поэтому такие категории пропускаются молча,
+// а не с замечанием, как при отсутствующем профиле.
+func (s Settings) activeCategories() []profile.Category {
+	if !s.CorpDisabled && !s.ProxyDisabled {
+		return s.Categories
+	}
+	var cats []profile.Category
+	for _, c := range s.Categories {
+		if s.CorpDisabled && c.Action == profile.ActionCorp || s.ProxyDisabled && c.Action == profile.ActionProxy {
+			continue
+		}
+		cats = append(cats, c)
+	}
+	return cats
 }
 
 // PrepareOVPN читает .ovpn, проверяет его и встраивает в него ключи из

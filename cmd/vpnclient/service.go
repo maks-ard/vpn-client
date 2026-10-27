@@ -42,6 +42,8 @@ type Service struct {
 	statusItem *application.MenuItem
 	toggleItem *application.MenuItem
 	russiaItem *application.MenuItem
+	corpItem   *application.MenuItem
+	proxyItem  *application.MenuItem
 
 	mu        sync.Mutex
 	state     app.State
@@ -639,15 +641,20 @@ func (s *Service) setupTray() {
 	s.toggleItem = s.menu.Add("Подключить").OnClick(func(*application.Context) { go s.Toggle() })
 	s.menu.Add("Открыть окно").OnClick(func(*application.Context) { s.ShowWindow() })
 	s.menu.AddSeparator()
+	s.corpItem = s.menu.AddCheckbox("Корпоративная сеть", true).
+		OnClick(func(ctx *application.Context) {
+			on := ctx.ClickedMenuItem().Checked()
+			s.saveFromTray(func(settings *app.Settings) { settings.CorpDisabled = !on })
+		})
+	s.proxyItem = s.menu.AddCheckbox("Зарубежные сайты", true).
+		OnClick(func(ctx *application.Context) {
+			on := ctx.ClickedMenuItem().Checked()
+			s.saveFromTray(func(settings *app.Settings) { settings.ProxyDisabled = !on })
+		})
 	s.russiaItem = s.menu.AddCheckbox("Российские сайты напрямую", true).
 		OnClick(func(ctx *application.Context) {
-			settings := s.settings()
-			settings.RussiaDirect = ctx.ClickedMenuItem().Checked()
-			go func() {
-				if err := s.SaveSettings(settings); err == nil {
-					s.wapp.Event.Emit("settings-changed")
-				}
-			}()
+			on := ctx.ClickedMenuItem().Checked()
+			s.saveFromTray(func(settings *app.Settings) { settings.RussiaDirect = on })
 		})
 	s.menu.Add("Журнал").OnClick(func(*application.Context) { go s.OpenLog() })
 	s.menu.AddSeparator()
@@ -660,6 +667,17 @@ func (s *Service) setupTray() {
 	s.tray.OnClick(s.ShowWindow)
 	s.tray.OnDoubleClick(func() { go s.Toggle() })
 	s.refreshTray(s.State())
+}
+
+// saveFromTray меняет одну настройку из меню трея и сообщает окну.
+func (s *Service) saveFromTray(change func(*app.Settings)) {
+	settings := s.settings()
+	change(&settings)
+	go func() {
+		if err := s.SaveSettings(settings); err == nil {
+			s.wapp.Event.Emit("settings-changed")
+		}
+	}()
 }
 
 func (s *Service) refreshTray(st app.State) {
@@ -696,7 +714,7 @@ func (s *Service) refreshTray(st app.State) {
 
 	var parts []string
 	if st.Status == app.StatusConnected {
-		if st.Corp.Enabled {
+		if st.Corp.Enabled && !st.Corp.Off {
 			parts = append(parts, "OpenVPN "+map[bool]string{true: "доступен", false: "доступ не подтверждён"}[st.Corp.Up])
 		}
 		if st.Proxy.Enabled && st.Proxy.Current != "" {
@@ -729,9 +747,13 @@ func (s *Service) refreshTray(st app.State) {
 		toggle = "Установить службу"
 	}
 	russia := s.settings().RussiaDirect
-	if key := fmt.Sprint(status, toggle, russia); key != s.lastMenu {
+	// Переключатели подключений видны, только когда подключение настроено.
+	corp, proxy := st.Corp.Enabled || st.Corp.Off, st.Proxy.Enabled || st.Proxy.Off
+	if key := fmt.Sprint(status, toggle, russia, corp, st.Corp.Off, proxy, st.Proxy.Off); key != s.lastMenu {
 		s.statusItem.SetLabel(status)
 		s.toggleItem.SetLabel(toggle)
+		s.corpItem.SetHidden(!corp).SetChecked(!st.Corp.Off)
+		s.proxyItem.SetHidden(!proxy).SetChecked(!st.Proxy.Off)
 		s.russiaItem.SetChecked(russia)
 		s.menu.Update()
 		s.lastMenu = key
