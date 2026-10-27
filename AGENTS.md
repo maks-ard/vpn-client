@@ -9,7 +9,9 @@ VPN-клиент для Windows на Go с раздельной маршрути
 (домены из настроек и всё, что прислал сервер) идёт через OpenVPN, зарубежный
 через VLESS, остальное напрямую. Сетевую часть выполняет внешний процесс
 **sing-box ≥ 1.14** (TUN, встроенный `openvpn-client`, VLESS, DNS). Наш код
-только собирает его конфиг и управляет процессом. Своя сетевая логика (пакеты,
+только собирает его конфиг и управляет процессом. С настройкой «Системный
+OpenVPN» корпоративную сеть вместо `openvpn-client` поднимает `openvpn.exe`,
+установленный пользователем (OpenVPN Community 2.6), тоже внешним процессом. Своя сетевая логика (пакеты,
 маршруты, WinAPI для сети) не пишется без явного решения владельца.
 
 Целевая платформа — только Windows (amd64). Разработка и CI идут на Linux, поэтому
@@ -24,6 +26,8 @@ go vet ./... && GOOS=windows go vet ./...
 gofmt -l .                           # должно быть пусто
 go test ./...                        # unit-тесты
 VPNCLIENT_SINGBOX=/path/to/sing-box go test ./...   # + проверка конфига и полный цикл подключения с настоящим sing-box
+sudo scripts/openvpn-lab.sh up /tmp/vpnlab            # стенд OpenVPN 2.6 в network namespace (Linux, root)
+VPNCLIENT_SINGBOX=… VPNCLIENT_OPENVPN_LAB=/tmp/vpnlab go test ./internal/app -run SystemOpenVPN   # полный цикл с системным OpenVPN
 go run ./cmd/vpnctl config -p internal/singbox/testdata/profile.yaml   # посмотреть итоговый конфиг
 ```
 
@@ -53,6 +57,7 @@ internal/update/     автообновление из GitHub Releases с про
 internal/profile/    профиль (YAML для vpnctl; GUI собирает его из настроек)
 internal/subscription/  подписки: загрузка, base64, subscription-userinfo, кэш
 internal/ovpn/       парсер .ovpn → ovpn.Config (без зависимостей от sing-box)
+internal/openvpn/    системный OpenVPN: конфиг для openvpn.exe, запуск, разбор журнала
 internal/vless/      парсер ссылок vless://
 internal/singbox/    сборка JSON-конфига sing-box
 internal/runner/     запуск/остановка sing-box, распаковка встроенного; *_windows.go / *_other.go
@@ -70,7 +75,8 @@ profiles/example.yaml  пример профиля для vpnctl
 его окно открывает напрямую, когда служба не отвечает.
 
 Зависимости направлены строго вниз: `cmd` → `winsvc`/`ipc` → `app` → `singbox` →
-`profile`/`subscription`/`ovpn`/`vless`; `runner`, `killswitch` и `corproute` ни от чего внутреннего не зависят.
+`profile`/`subscription`/`ovpn`/`vless`; `app` → `openvpn` → `runner`; `runner`, `killswitch` и
+`corproute` ни от чего внутреннего не зависят.
 Wails импортирует только `cmd/vpnclient`: `internal/app` тестируется без GUI.
 
 ## GUI
@@ -120,6 +126,12 @@ Wails импортирует только `cmd/vpnclient`: `internal/app` тес
   не поднимется и корпоративный доступ.
 - Сервер OpenVPN не должен забирать весь трафик: `redirect-gateway` и
   `block-outside-dns` всегда игнорируются через `forcedPullFilters`.
+- Системный OpenVPN (`Input.CorpLink`): вместо endpoint — outbound `direct` с
+  `bind_interface` на адаптер OpenVPN, `dns-corp` — UDP через тот же адаптер,
+  `preferred_by` заменён подсетями и доменами от сервера, адреса серверов OpenVPN
+  в `route_exclude_address` TUN. Пока OpenVPN не подключился (`Interface` пуст),
+  корпоративные правила отклоняют соединения (`reject`) и отвечают на DNS
+  SERVFAIL, а не пропускают трафик мимо туннеля. Без `CorpLink` конфиг не меняется.
 
 ## Стиль кода
 
@@ -157,6 +169,16 @@ Wails импортирует только `cmd/vpnclient`: `internal/app` тес
   с app ID `System` разрешены намеренно: антивирусы с проверкой трафика пересоздают в ядре соединения sing-box.
   Настоящие фильтры проверяет `TestEnable` (от администратора,
   `VPNCLIENT_KILLSWITCH_TEST=1`; на пару секунд отключает сеть у всей машины).
+- Системный OpenVPN (`internal/openvpn`, решение владельца) запускается службой от имени
+  SYSTEM, а `.ovpn` загружает обычный пользователь. Поэтому `openvpn.Config` выкидывает
+  всё, что запускает программы, грузит библиотеки или читает и пишет файлы по путям
+  (скрипты, `plugin`, `engine`/`providers`, `log`, `status`, `config`, пути к ключам вне
+  `.ovpn`); список расширяй, а не сужай. Конфиг и пароль идут через stdin
+  (`--config stdin`, inline `<auth-user-pass>`). DNS Windows OpenVPN не меняет
+  (`pull-filter ignore` для `dhcp-option` и `dns`): при `strict_route` sing-box закрывает
+  DNS мимо TUN, и правила NRPT от OpenVPN сломали бы корпоративные имена. Состояние
+  туннеля служба узнаёт из журнала (`verb 3`), формат сверен с OpenVPN 2.6. Kill switch
+  разрешает `openvpn.exe` и соединения с адреса компании.
 - Маршруты через адаптер OpenVPN (`internal/corproute`, решение владельца) — вторая
   своя сетевая логика. Включается только настройкой «Адрес компании в Windows»
   (`openvpn.system_interface`, endpoint с `system: true`). Маршруты ставятся только через
